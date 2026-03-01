@@ -1,0 +1,81 @@
+:root {
+  --good: #2dd4bf;
+  --bad: #fb7185;
+  --warn: #f59e0b;
+}
+
+html[data-theme="dark"] {
+  --bg: #071019;
+  --text: #ecf6ff;
+  --muted: #97abc3;
+  --accent: #2cb6ff;
+  --accent-2: #14f1b2;
+  --panel: rgba(10, 20, 32, 0.82);
+  --panel-2: rgba(13, 24, 38, 0.92);
+  --border: rgba(133, 170, 210, 0.18);
+  --border-soft: rgba(133, 170, 210, 0.12);
+  --scroll-track: rgba(10, 20, 32, 0.7);
+  --scroll-thumb: rgba(133, 170, 210, 0.35);
+  --scroll-thumb-hover: rgba(133, 170, 210, 0.55);
+  --page-gradient:
+    radial-gradient(circle at 0% 0%, rgba(38, 145, 255, 0.24), transparent 45%),
+    radial-gradient(circle at 100% 0%, rgba(10, 230, 162, 0.16), transparent 42%),
+    radial-gradient(circle at 50% 100%, rgba(71, 42, 175, 0.18), transparent 44%),
+    linear-gradient(180deg, #050a12 0%, #091320 100%);
+  --page-noise:
+    linear-gradient(120deg, rgba(255,255,255,0.02) 25%, transparent 25%) 0 0/22px 22px,
+    linear-gradient(300deg, rgba(255,255,255,0.015) 25%, transparent 25%) 0 0/22px 22px;
+}
+
+html[data-theme="light"] {
+  --bg: #eef5fb;
+  --text: #0b1826;
+  --muted: #55697f;
+  --accent: #0b84ff;
+  --accent-2: #0fbf94;
+  --panel: rgba(255, 255, 255, 0.85);
+  --panel-2: rgba(255, 255, 255, 0.95);
+  --border: rgba(19, 56, 91, 0.12);
+  --border-soft: rgba(19, 56, 91, 0.08);
+  --scroll-track: rgba(235, 243, 250, 0.95);
+  --scroll-thumb: rgba(85, 105, 127, 0.35);
+  --scroll-thumb-hover: rgba(85, 105, 127, 0.55);
+  --page-gradient:
+    radial-gradient(circle at 10% 0%, rgba(11, 132, 255, 0.14), transparent 44%),
+    radial-gradient(circle at 95% 5%, rgba(15, 191, 148, 0.14), transparent 34%),
+    linear-gradient(180deg, #f7fbff 0%, #ebf3fa 100%);
+  --page-noise: none;
+}
+
+.hero-card.theme-stocks {
+  background-image:
+    linear-gradient(160deg, rgba(11, 132, 255, 0.16), rgba(11, 132, 255, 0.03)),
+    url("../assets/backgrounds/stocks-bg.svg");
+  background-size: cover;
+  background-position: center;
+}
+
+.hero-card.theme-crypto {
+  background-image:
+    linear-gradient(160deg, rgba(20, 241, 178, 0.11), rgba(16, 24, 44, 0.1)),
+    url("../assets/backgrounds/crypto-bg.svg");
+  background-size: cover;
+  background-position: center;
+}
+
+
+html[data-theme="light"] .hero-card.theme-stocks {
+  background-image:
+    linear-gradient(160deg, rgba(11, 132, 255, 0.10), rgba(255, 255, 255, 0.78)),
+    radial-gradient(circle at 85% 15%, rgba(11, 132, 255, 0.12), transparent 42%),
+    radial-gradient(circle at 20% 90%, rgba(15, 191, 148, 0.10), transparent 38%);
+  border-color: rgba(19, 56, 91, 0.10);
+}
+
+html[data-theme="light"] .hero-card.theme-crypto {
+  background-image:
+    linear-gradient(160deg, rgba(15, 191, 148, 0.08), rgba(255, 255, 255, 0.82)),
+    radial-gradient(circle at 85% 15%, rgba(20, 241, 178, 0.12), transparent 40%),
+    radial-gradient(circle at 15% 85%, rgba(44, 182, 255, 0.10), transparent 36%);
+  border-color: rgba(19, 56, 91, 0.10);
+}

@@ -1,0 +1,45 @@
+{
+  "exportedAt": "2026-02-25T00:00:00.000Z",
+  "portfolio": {
+    "stocks": [
+      {
+        "id": "sample-aapl",
+        "type": "stock",
+        "symbol": "AAPL",
+        "stooqSymbol": "aapl.us",
+        "name": "Apple Inc.",
+        "quantity": 10,
+        "entryPrice": 180.25
+      },
+      {
+        "id": "sample-nvda",
+        "type": "stock",
+        "symbol": "NVDA",
+        "stooqSymbol": "nvda.us",
+        "name": "NVIDIA Corp.",
+        "quantity": 3,
+        "entryPrice": 540.0
+      }
+    ],
+    "crypto": [
+      {
+        "id": "sample-btc",
+        "type": "crypto",
+        "symbol": "BTC",
+        "coinId": "bitcoin",
+        "name": "Bitcoin",
+        "quantity": 0.15,
+        "entryPrice": 55000
+      },
+      {
+        "id": "sample-sol",
+        "type": "crypto",
+        "symbol": "SOL",
+        "coinId": "solana",
+        "name": "Solana",
+        "quantity": 12,
+        "entryPrice": 118.5
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+.chart-wrap {
+  position: relative;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  overflow: hidden;
+}
+
+.chart-wrap--pie {
+  height: 290px;
+  padding: 0.5rem;
+}
+
+.chart-wrap--line {
+  height: 260px;
+  padding: 0.4rem;
+}
+
+.chart-wrap--dominance {
+  height: 180px;
+  padding: 0.35rem;
+}
+
+.chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.chart-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+  background: rgba(0, 0, 0, 0.15);
+}

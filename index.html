@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>Stocks & Crypto Portfolio Manager (2026)</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="styles/global.css" />
+  <link rel="stylesheet" href="styles/themes.css" />
+  <link rel="stylesheet" href="styles/components.css" />
+  <link rel="stylesheet" href="styles/charts.css" />
+  <script>
+    // Toggle local proxy mode without editing JS files.
+    // false = direct API calls (original behavior)
+    // true  = route external requests through localhost proxy (server.js)
+    window.PT_CONFIG = {
+      useLocalProxy: true,
+      proxyBase: 'http://localhost:3000'
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <canvas id="cryptoParticlesCanvas" class="crypto-particles hidden" aria-hidden="true"></canvas>
+  <div class="app-shell">
+    <header class="topbar glass">
+      <div class="brand">
+        <div class="brand__mark">PT</div>
+        <div>
+          <h1>Portfolio Tracker</h1>
+          <p>Stocks & Crypto Portfolio Manager (2026)</p>
+        </div>
+      </div>
+      <div class="topbar__actions">
+        <div class="topbar__group topbar__group--mode">
+          <div class="mode-switch mode-switch--topbar" role="tablist" aria-label="Portfolio mode">
+            <button id="stocksTab" class="mode-switch__btn is-active" type="button" data-mode="stocks" role="tab" aria-selected="true">Stocks</button>
+            <button id="cryptoTab" class="mode-switch__btn" type="button" data-mode="crypto" role="tab" aria-selected="false">Crypto</button>
+          </div>
+          <span id="connectionModeBadge" class="status-badge" title="API connection mode">Direct</span>
+        </div>
+        <div class="topbar__group topbar__group--actions">
+          <button id="layoutToggle" class="btn btn--ghost" type="button" aria-label="Toggle layout width">Wide</button>
+          <button id="cryptoParticlesToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle crypto particles">Particles On</button>
+          <button id="demoModeToggle" class="btn btn--ghost btn--tiny" type="button" aria-label="Toggle demo portfolio mode">Demo Off</button>
+          <button id="apiDebugToggle" class="btn btn--ghost btn--tiny" type="button" aria-label="Toggle API debug panel">API Debug Off</button>
+          <button id="holdingsPrivacyToggle" class="btn btn--ghost" type="button" aria-label="Toggle holdings privacy">Hide Holdings</button>
+          <button id="themeToggle" class="btn btn--ghost" type="button" aria-label="Toggle theme">Theme</button>
+          <button id="exportBtn" class="btn btn--ghost" type="button">Export</button>
+          <label class="btn btn--ghost file-btn" for="importInput">Import</label>
+          <input id="importInput" type="file" accept="application/json" hidden />
+          <button id="addAssetBtn" class="btn btn--primary" type="button">+ Add Asset</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="main-panel">
+        <section class="hero-card glass" id="heroCard">
+          <div>
+          <p class="eyebrow">Portfolio Overview.</p>
+            <h2 id="overviewTitle">Stocks Portfolio</h2>
+            <p id="overviewSubtitle">Live prices from Stooq and CoinGecko with local-first storage.</p>
+          </div>
+          <div class="hero-stats">
+            <div class="stat-pill">
+              <span>Total Value</span>
+              <strong id="totalValue">$0.00</strong>
+            </div>
+            <div class="stat-pill">
+              <span>Total P/L</span>
+              <strong id="totalPL">$0.00 (0.00%)</strong>
+            </div>
+            <div class="stat-pill">
+              <span>Daily P/L</span>
+              <strong id="totalDailyPL">$0.00 (0.00%)</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="controls-row glass">
+          <div class="sort-wrap">
+            <label for="sortSelect">Sort</label>
+            <select id="sortSelect">
+              <option value="az">A-Z</option>
+              <option value="value-desc">Value (High-Low)</option>
+              <option value="value-asc">Value (Low-High)</option>
+              <option value="pl-desc">P/L (High-Low)</option>
+              <option value="pl-asc">P/L (Low-High)</option>
+              <option value="daily-pl-desc">Daily P/L (High-Low)</option>
+              <option value="daily-pl-asc">Daily P/L (Low-High)</option>
+              <option value="day-desc">Day Change (High-Low)</option>
+              <option value="day-asc">Day Change (Low-High)</option>
+            </select>
+          </div>
+          <div class="controls-row__right">
+            <button id="refreshBtn" class="btn btn--primary controls-refresh" type="button">Refresh Prices</button>
+            <div class="controls-toggles">
+              <button id="stocksAutoRefreshToggle" class="btn btn--ghost btn--tiny controls-toggle" type="button" title="Toggle stocks auto refresh every 10 minutes">Auto refresh (10 min): Off</button>
+              <button id="cryptoAutoRefreshToggle" class="btn btn--ghost btn--tiny controls-toggle hidden" type="button" title="Toggle crypto auto refresh every 10 minutes">Auto refresh (10 min): Off</button>
+              <button id="twelveDataToggle" class="btn btn--ghost btn--tiny controls-toggle" type="button" title="Toggle TwelveData paid fallback">12D Off</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="portfolio-grid">
+          <div class="portfolio-list glass">
+            <div class="section-header">
+              <h3>Holdings</h3>
+              <span id="holdingsCount" class="muted">0 assets</span>
+            </div>
+            <div id="portfolioList" class="asset-list" aria-live="polite"></div>
+          </div>
+
+          <div class="pie-panel glass">
+            <div class="section-header">
+              <h3>Allocation</h3>
+              <span class="muted">Pie chart</span>
+            </div>
+            <div class="chart-wrap chart-wrap--pie">
+              <canvas id="allocationChart" aria-label="Allocation pie chart"></canvas>
+              <div id="pieFallback" class="chart-fallback hidden">Chart.js unavailable. Allocation list still works.</div>
+            </div>
+            <div id="allocationLegend" class="allocation-legend"></div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="side-panel glass" id="detailPanel">
+        <div class="section-header">
+          <div class="detail-title-group">
+            <h3 id="detailTitle">Select an asset</h3>
+            <div id="detailPriceBadge" class="detail-price-badge hidden" aria-live="polite"></div>
+          </div>
+          <a id="externalLink" class="link-btn" href="#" target="_blank" rel="noopener noreferrer">Open Source Link</a>
+        </div>
+
+        <div id="detailMeta" class="detail-meta"></div>
+
+        <div class="chart-wrap chart-wrap--line">
+          <canvas id="assetChart" aria-label="Asset price chart"></canvas>
+          <div id="lineFallback" class="chart-fallback hidden">Chart unavailable.</div>
+        </div>
+
+        <section class="panel-block">
+          <div class="panel-block__head">
+            <h4>Market Data</h4>
+          </div>
+          <div id="marketDataGrid" class="mini-grid"></div>
+        </section>
+
+        <section class="panel-block">
+          <div class="panel-block__head">
+            <h4>News</h4>
+            <div id="newsScopeToggle" class="news-scope-toggle" role="group" aria-label="News scope">
+              <button id="newsScopeGeneralBtn" class="btn btn--tiny btn--ghost" type="button">General</button>
+              <button id="newsScopeSelectedBtn" class="btn btn--tiny btn--ghost" type="button">Selected</button>
+            </div>
+            <select id="newsSourceSelect" class="news-source-select" title="News source">
+              <option value="auto">Auto</option>
+              <option value="yahoo">Yahoo</option>
+              <option value="tickertick">TickerTick</option>
+            </select>
+            <button id="newsRefreshBtn" class="btn btn--tiny btn--ghost" type="button">Refresh</button>
+          </div>
+          <div id="newsList" class="news-list"></div>
+        </section>
+
+        <section class="panel-block">
+          <div class="panel-block__head">
+            <h4>Socials</h4>
+          </div>
+          <div id="twitterSection" class="twitter-placeholder"></div>
+        </section>
+
+        <section class="panel-block">
+          <div class="panel-block__head">
+            <h4>Useful Links</h4>
+          </div>
+          <div id="usefulLinksList" class="news-list"></div>
+        </section>
+
+        <section class="panel-block">
+          <div class="panel-block__head">
+            <h4 id="eventsBlockTitle">Events</h4>
+          </div>
+          <div id="eventsList" class="events-list"></div>
+        </section>
+
+        <section id="btcDominancePanel" class="panel-block hidden">
+          <div class="panel-block__head">
+            <h4>BTC Dominance</h4>
+            <span id="btcDominanceLabel" class="muted">Global crypto market share</span>
+            <a class="link-btn" href="https://www.tradingview.com/symbols/CRYPTOCAP-BTC.D/" target="_blank" rel="noopener noreferrer">Open Chart</a>
+          </div>
+          <div class="btcdom-card">
+            <div class="btcdom-card__hero">
+              <div>
+                <div class="btcdom-card__value" id="btcDominanceValue">--.--%</div>
+                <div class="btcdom-card__sub" id="btcDominanceUpdated">Waiting for live data...</div>
+              </div>
+              <div class="btcdom-card__coin">₿</div>
+            </div>
+            <div class="btcdom-bars">
+              <div class="btcdom-bars__row">
+                <span>BTC</span>
+                <div class="btcdom-bars__track"><div id="btcDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--btc" style="width:0%"></div></div>
+                <strong id="btcDominanceBarLabel">--.--%</strong>
+              </div>
+              <div class="btcdom-bars__row">
+                <span>ETH</span>
+                <div class="btcdom-bars__track"><div id="ethDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--eth" style="width:0%"></div></div>
+                <strong id="ethDominanceBarLabel">--.--%</strong>
+              </div>
+              <div class="btcdom-bars__row">
+                <span>Others</span>
+                <div class="btcdom-bars__track"><div id="othersDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--other" style="width:0%"></div></div>
+                <strong id="othersDominanceBarLabel">--.--%</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <aside id="apiDebugPanel" class="api-debug-panel glass hidden" aria-hidden="true">
+    <div class="api-debug-panel__head">
+      <h3>API Debug</h3>
+      <span class="muted">Browser request count</span>
+    </div>
+    <div class="api-debug-panel__table-wrap">
+      <table class="api-debug-table">
+        <thead>
+          <tr>
+            <th>API</th>
+            <th>Last Trigger</th>
+            <th>Calls</th>
+            <th>Failed</th>
+          </tr>
+        </thead>
+        <tbody id="apiDebugTableBody"></tbody>
+      </table>
+    </div>
+  </aside>
+
+  <div id="assetModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-modal="1"></div>
+    <div class="modal__dialog glass" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal__header">
+        <h3 id="modalTitle">Add Asset</h3>
+        <button id="modalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="assetForm" class="modal__form">
+        <div class="field-group">
+          <label for="assetTypeInput">Asset Type</label>
+          <select id="assetTypeInput">
+            <option value="stock">Stock</option>
+            <option value="crypto">Crypto</option>
+          </select>
+        </div>
+
+        <div class="field-group autocomplete">
+          <label for="assetSearchInput">Symbol / Name</label>
+          <input id="assetSearchInput" type="text" autocomplete="off" placeholder="Search AAPL or Bitcoin" required />
+          <input id="assetSelectedId" type="hidden" />
+          <div id="autocompleteList" class="autocomplete__list hidden"></div>
+        </div>
+
+        <div class="field-row">
+          <div class="field-group">
+            <label for="quantityInput">Quantity</label>
+            <div class="num-input-wrap">
+              <input id="quantityInput" type="number" min="0" step="any" required placeholder="1.5" />
+              <div class="num-input-wrap__controls" aria-hidden="true">
+                <button class="num-step num-step--up" type="button" data-target="quantityInput" data-dir="up" tabindex="-1" title="Increase">▲</button>
+                <button class="num-step num-step--down" type="button" data-target="quantityInput" data-dir="down" tabindex="-1" title="Decrease">▼</button>
+              </div>
+            </div>
+          </div>
+          <div class="field-group">
+            <label for="entryPriceInput">Entry Price (USD)</label>
+            <div class="num-input-wrap">
+              <input id="entryPriceInput" type="number" min="0" step="any" required placeholder="25000" />
+              <div class="num-input-wrap__controls" aria-hidden="true">
+                <button class="num-step num-step--up" type="button" data-target="entryPriceInput" data-dir="up" tabindex="-1" title="Increase">▲</button>
+                <button class="num-step num-step--down" type="button" data-target="entryPriceInput" data-dir="down" tabindex="-1" title="Decrease">▼</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal__actions">
+          <button type="button" id="cancelAssetBtn" class="btn btn--ghost">Cancel</button>
+          <button type="submit" class="btn btn--primary">Save Asset</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="positionModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-position-modal="1"></div>
+    <div class="modal__dialog glass" role="dialog" aria-modal="true" aria-labelledby="positionModalTitle">
+      <div class="modal__header">
+        <h3 id="positionModalTitle">Adjust Position</h3>
+        <button id="positionModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="positionForm" class="modal__form">
+        <div id="positionSummary" class="muted"></div>
+
+        <div class="field-group">
+          <label for="positionQtyInput">Quantity</label>
+          <div class="num-input-wrap">
+            <input id="positionQtyInput" type="number" min="0" step="any" required placeholder="10" />
+            <div class="num-input-wrap__controls" aria-hidden="true">
+              <button class="num-step num-step--up" type="button" data-target="positionQtyInput" data-dir="up" tabindex="-1" title="Increase">▲</button>
+              <button class="num-step num-step--down" type="button" data-target="positionQtyInput" data-dir="down" tabindex="-1" title="Decrease">▼</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="positionPriceGroup" class="field-group">
+          <label for="positionPriceInput">Entry Price (USD)</label>
+          <div class="num-input-wrap">
+            <input id="positionPriceInput" type="number" min="0" step="any" placeholder="Current price" />
+            <div class="num-input-wrap__controls" aria-hidden="true">
+              <button class="num-step num-step--up" type="button" data-target="positionPriceInput" data-dir="up" tabindex="-1" title="Increase">▲</button>
+              <button class="num-step num-step--down" type="button" data-target="positionPriceInput" data-dir="down" tabindex="-1" title="Decrease">▼</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="positionNote" class="muted"></div>
+
+        <div class="modal__actions">
+          <button type="button" id="positionCancelBtn" class="btn btn--ghost">Cancel</button>
+          <button type="submit" id="positionSubmitBtn" class="btn btn--primary">Apply</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <template id="assetRowTemplate">
+    <div class="asset-row-shell">
+      <article class="asset-row" tabindex="0">
+        <button class="asset-row__body" type="button">
+          <div class="asset-row__identity">
+            <div class="asset-row__symbol"></div>
+            <div class="asset-row__name"></div>
+          </div>
+          <div class="asset-row__numbers">
+            <div class="asset-row__value"></div>
+            <div class="asset-row__pl"></div>
+          </div>
+        </button>
+        <div class="asset-row__actions">
+          <div class="asset-row__quote-status"></div>
+          <div class="asset-row__action-buttons">
+            <button class="btn btn--tiny btn--ghost js-addqty" type="button" title="Add to position" aria-label="Add to position">+</button>
+            <button class="btn btn--tiny btn--ghost js-reduceqty" type="button" title="Reduce position" aria-label="Reduce position">−</button>
+            <button class="btn btn--tiny btn--ghost js-edit" type="button" title="Edit holding" aria-label="Edit holding">✎</button>
+            <button class="btn btn--tiny btn--danger js-remove" type="button" title="Remove holding" aria-label="Remove holding">✕</button>
+          </div>
+        </div>
+      </article>
+      <div class="asset-row__daymove asset-row__daymove--outer"></div>
+    </div>
+  </template>
+
+  <script src="scripts/state.js"></script>
+  <script src="scripts/storage.js"></script>
+  <script src="scripts/router.js"></script>
+  <script src="scripts/api-debug.js"></script>
+  <script src="scripts/api/stocks.js"></script>
+  <script src="scripts/api/stocks-market-data.js"></script>
+  <script src="scripts/api/crypto.js"></script>
+  <script src="scripts/api/news.js"></script>
+  <script src="scripts/api/stocktwits.js"></script>
+  <script src="scripts/api/events.js"></script>
+  <script src="scripts/particles.js"></script>
+  <script src="scripts/charts.js"></script>
+  <script src="scripts/ui.js"></script>
+  <script src="scripts/main.js"></script>
+</body>
+</html>
