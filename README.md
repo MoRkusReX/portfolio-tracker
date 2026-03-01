@@ -15,6 +15,6 @@ Pure HTML/CSS/vanilla JS portfolio manager for stocks and crypto that runs by do
 
 ## Run
 
-1. Open `index.html` directly (no server required).
+1. Run start-local.sh
 2. Add assets, refresh prices, and your portfolio is persisted automatically.
 3. If a feed/API is blocked by browser CORS from `file://`, cached data or fallback links are shown.
