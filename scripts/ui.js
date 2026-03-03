@@ -51,6 +51,7 @@
         cryptoParticlesToggle: qs('cryptoParticlesToggle'),
         cryptoParticlesCanvas: qs('cryptoParticlesCanvas'),
         demoModeToggle: qs('demoModeToggle'),
+        apiSourcesBtn: qs('apiSourcesBtn'),
         apiDebugToggle: qs('apiDebugToggle'),
         apiDebugPanel: qs('apiDebugPanel'),
         apiDebugTableBody: qs('apiDebugTableBody'),
@@ -124,6 +125,9 @@
         positionPriceInput: qs('positionPriceInput'),
         positionNote: qs('positionNote'),
         positionSubmitBtn: qs('positionSubmitBtn'),
+        apiSourcesModal: qs('apiSourcesModal'),
+        apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
+        apiSourcesContent: qs('apiSourcesContent'),
         assetTypeInput: qs('assetTypeInput'),
         assetSearchInput: qs('assetSearchInput'),
         assetSelectedId: qs('assetSelectedId'),
@@ -262,6 +266,10 @@
     setNewsSourceValue: function (value) {
       if (!this.el.newsSourceSelect) return;
       this.el.newsSourceSelect.value = value || 'auto';
+    },
+    setSortValue: function (value) {
+      if (!this.el.sortSelect) return;
+      this.el.sortSelect.value = value || 'az';
     },
     setNewsScopeToggle: function (mode, scope, hasSelectedStock) {
       if (!this.el.newsScopeToggle || !this.el.newsScopeGeneralBtn || !this.el.newsScopeSelectedBtn) return;
@@ -657,6 +665,81 @@
         this.el.positionSubmitBtn.classList.remove('btn--danger');
         this.el.positionSubmitBtn.classList.add('btn--primary');
       }
+    },
+    renderApiSourcesConfig: function (config) {
+      if (!this.el.apiSourcesContent) return;
+      var categories = (config && config.categories) || [];
+      var autoRefresh = (config && config.autoRefresh) || {};
+
+      function intervalFields(modeKey, label, values) {
+        var intervalSec = Math.max(15, Number(values && values.intervalSec || 600) || 600);
+        var mins = Math.floor(intervalSec / 60);
+        var secs = intervalSec % 60;
+        return '<div class="api-auto-row">' +
+          '<div class="api-auto-row__meta"><strong>' + esc(label) + '</strong><small>Refresh ' + esc(label.toLowerCase()) + ' prices automatically</small></div>' +
+          '<label class="api-toggle">' +
+            '<input type="checkbox" data-api-auto-toggle="' + esc(modeKey) + '"' + ((values && values.enabled) ? ' checked' : '') + ' />' +
+            '<span>Enabled</span>' +
+          '</label>' +
+          '<div class="api-auto-row__inputs">' +
+            '<label><span>Min</span><input type="number" min="0" step="1" data-api-auto-min="' + esc(modeKey) + '" value="' + esc(String(mins)) + '" /></label>' +
+            '<label><span>Sec</span><input type="number" min="0" max="59" step="1" data-api-auto-sec="' + esc(modeKey) + '" value="' + esc(String(secs)) + '" /></label>' +
+          '</div>' +
+        '</div>';
+      }
+
+      var html = '<section class="api-config-section">' +
+        '<div class="api-config-section__head"><div><h4>Auto Updates</h4><p>Move refresh timing here instead of the toolbar toggle buttons.</p></div></div>' +
+        '<div class="api-auto-grid">' +
+          intervalFields('stocks', 'Stocks', autoRefresh.stocks || {}) +
+          intervalFields('crypto', 'Crypto', autoRefresh.crypto || {}) +
+        '</div>' +
+      '</section>';
+
+      categories.forEach(function (category) {
+        html += '<section class="api-config-section">' +
+          '<div class="api-config-section__head"><div><h4>' + esc(category.label) + '</h4><p>' + esc(category.note || '') + '</p></div></div>' +
+          '<div class="api-source-list" data-api-category="' + esc(category.id) + '">';
+        (category.items || []).forEach(function (item) {
+          html += '<div class="api-source-card" draggable="true" data-api-drag="1" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '">' +
+            '<div class="api-source-card__handle" aria-hidden="true">drag</div>' +
+            '<div class="api-source-card__body">' +
+              '<div class="api-source-card__title"><strong>' + esc(item.label) + '</strong>' + (item.requiresKey ? '<span class="api-source-badge api-source-badge--key">API Key</span>' : '') + '</div>' +
+              '<div class="api-source-card__meta">' + esc(item.assetScope || '') + '</div>' +
+            '</div>' +
+            '<label class="api-toggle">' +
+              '<input type="checkbox" data-api-source-toggle="1" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '"' + (item.enabled ? ' checked' : '') + ' />' +
+              '<span>' + (item.enabled ? 'On' : 'Off') + '</span>' +
+            '</label>' +
+          '</div>';
+        });
+        html += '</div></section>';
+      });
+
+      html += '<div class="modal__actions"><button type="button" id="apiSourcesDoneBtn" class="btn btn--primary">Done</button></div>';
+      this.el.apiSourcesContent.innerHTML = html;
+    },
+    openApiSourcesModal: function (config) {
+      if (!this.el.apiSourcesModal) return;
+      this.el.apiSourcesModal.classList.remove('hidden');
+      this.el.apiSourcesModal.setAttribute('aria-hidden', 'false');
+      try {
+        this.renderApiSourcesConfig(config || {});
+      } catch (err) {
+        if (this.el.apiSourcesContent) {
+          this.el.apiSourcesContent.innerHTML = '<section class="api-config-section">' +
+            '<div class="api-config-section__head"><div><h4>Unable to render API source settings</h4><p>' +
+            esc((err && err.message) || 'Unknown error') +
+            '</p></div></div>' +
+            '<div class="modal__actions"><button type="button" id="apiSourcesDoneBtn" class="btn btn--primary">Close</button></div>' +
+          '</section>';
+        }
+      }
+    },
+    closeApiSourcesModal: function () {
+      if (!this.el.apiSourcesModal) return;
+      this.el.apiSourcesModal.classList.add('hidden');
+      this.el.apiSourcesModal.setAttribute('aria-hidden', 'true');
     },
     renderAutocomplete: function (items) {
       if (!items || !items.length) {

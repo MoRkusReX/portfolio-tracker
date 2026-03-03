@@ -44,6 +44,7 @@
           <button id="layoutToggle" class="btn btn--ghost" type="button" aria-label="Toggle layout width">Wide</button>
           <button id="cryptoParticlesToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle crypto particles">Particles On</button>
           <button id="demoModeToggle" class="btn btn--ghost btn--tiny" type="button" aria-label="Toggle demo portfolio mode">Demo Off</button>
+          <button id="apiSourcesBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Open API source settings" onclick="if(window.PT&&typeof window.PT.forceOpenApiSourcesModal==='function'){window.PT.forceOpenApiSourcesModal();}">API Sources</button>
           <button id="apiDebugToggle" class="btn btn--ghost btn--tiny" type="button" aria-label="Toggle API debug panel">API Debug Off</button>
           <button id="holdingsPrivacyToggle" class="btn btn--ghost" type="button" aria-label="Toggle holdings privacy">Hide Holdings</button>
           <button id="themeToggle" class="btn btn--ghost" type="button" aria-label="Toggle theme">Theme</button>
@@ -96,11 +97,6 @@
           </div>
           <div class="controls-row__right">
             <button id="refreshBtn" class="btn btn--primary controls-refresh" type="button">Refresh Prices</button>
-            <div class="controls-toggles">
-              <button id="stocksAutoRefreshToggle" class="btn btn--ghost btn--tiny controls-toggle" type="button" title="Toggle stocks auto refresh every 10 minutes">Auto refresh (10 min): Off</button>
-              <button id="cryptoAutoRefreshToggle" class="btn btn--ghost btn--tiny controls-toggle hidden" type="button" title="Toggle crypto auto refresh every 10 minutes">Auto refresh (10 min): Off</button>
-              <button id="twelveDataToggle" class="btn btn--ghost btn--tiny controls-toggle" type="button" title="Toggle TwelveData paid fallback">12D Off</button>
-            </div>
           </div>
         </section>
 
@@ -341,6 +337,29 @@
     </div>
   </div>
 
+  <div id="apiSourcesModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-api-sources-modal="1" onclick="var m=document.getElementById('apiSourcesModal');if(m){m.classList.add('hidden');m.setAttribute('aria-hidden','true');}"></div>
+    <div class="modal__dialog modal__dialog--wide glass" role="dialog" aria-modal="true" aria-labelledby="apiSourcesTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="apiSourcesTitle">API Sources</h3>
+          <div class="muted">Reorder sources inside each panel category and manage auto update intervals.</div>
+        </div>
+        <button id="apiSourcesModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close" onclick="var m=document.getElementById('apiSourcesModal');if(m){m.classList.add('hidden');m.setAttribute('aria-hidden','true');}">✕</button>
+      </div>
+      <div id="apiSourcesContent" class="api-sources-config">
+        <section class="api-config-section">
+          <div class="api-config-section__head">
+            <div>
+              <h4>Loading API source settings...</h4>
+              <p>If this text appears, the modal is opening and the remaining issue is only the JS content render path.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
   <template id="assetRowTemplate">
     <div class="asset-row-shell">
       <article class="asset-row" tabindex="0">
@@ -382,5 +401,165 @@
   <script src="scripts/charts.js"></script>
   <script src="scripts/ui.js"></script>
   <script src="scripts/main.js"></script>
+  <script>
+    (function () {
+      var PT = (window.PT = window.PT || {});
+
+      function esc(text) {
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function defaultPrefsFromCatalog(catalog) {
+        var prefs = {};
+        (catalog || []).forEach(function (category) {
+          prefs[category.id] = (category.sources || []).map(function (source) {
+            return {
+              id: source.id,
+              enabled: source.enabled !== false
+            };
+          });
+        });
+        return prefs;
+      }
+
+      function renderApiSourcesFallback(content, model) {
+        var categories = (model && model.categories) || [];
+        var autoRefresh = (model && model.autoRefresh) || {};
+        var selectedMode = (model && model.selectedMode) === 'crypto' ? 'crypto' : 'stocks';
+        var selectedAssetType = selectedMode === 'crypto' ? 'crypto' : 'stock';
+
+        function renderAutoRow(modeKey, label, values) {
+          var intervalSec = Math.max(15, Number(values && values.intervalSec || 600) || 600);
+          var mins = Math.floor(intervalSec / 60);
+          var secs = intervalSec % 60;
+          return '<div class="api-auto-row">' +
+            '<div class="api-auto-row__meta"><strong>' + esc(label) + '</strong><small>Refresh ' + esc(label.toLowerCase()) + ' prices automatically</small></div>' +
+            '<label class="api-toggle">' +
+              '<input type="checkbox" data-api-auto-toggle="' + esc(modeKey) + '"' + ((values && values.enabled) ? ' checked' : '') + ' />' +
+              '<span>Enabled</span>' +
+            '</label>' +
+            '<div class="api-auto-row__inputs">' +
+              '<label><span>Min</span><input type="number" min="0" step="1" data-api-auto-min="' + esc(modeKey) + '" value="' + esc(String(mins)) + '" /></label>' +
+              '<label><span>Sec</span><input type="number" min="0" max="59" step="1" data-api-auto-sec="' + esc(modeKey) + '" value="' + esc(String(secs)) + '" /></label>' +
+            '</div>' +
+          '</div>';
+        }
+
+        var html = '<section class="api-config-section">' +
+          '<div class="api-config-section__head"><div><h4>View</h4><p>Switch between stock and crypto source priority.</p></div></div>' +
+          '<div class="controls-toggles">' +
+            '<button type="button" class="btn btn--tiny ' + (selectedMode === 'stocks' ? 'btn--primary' : 'btn--ghost') + '" onclick="window.PT.forceOpenApiSourcesModal(\'stocks\')">Stocks</button>' +
+            '<button type="button" class="btn btn--tiny ' + (selectedMode === 'crypto' ? 'btn--primary' : 'btn--ghost') + '" onclick="window.PT.forceOpenApiSourcesModal(\'crypto\')">Crypto</button>' +
+          '</div>' +
+        '</section>';
+
+        html += '<section class="api-config-section">' +
+          '<div class="api-config-section__head"><div><h4>Auto Updates</h4><p>Manage refresh timing for ' + esc(selectedMode) + ' here.</p></div></div>' +
+          '<div class="api-auto-grid">' +
+            renderAutoRow(selectedMode, selectedMode === 'crypto' ? 'Crypto' : 'Stocks', autoRefresh[selectedMode] || {}) +
+          '</div>' +
+        '</section>';
+
+        categories.forEach(function (category) {
+          var items = (category.items || []).filter(function (item) {
+            var assetTypes = Array.isArray(item.assetTypes) ? item.assetTypes : [];
+            if (!assetTypes.length) return true;
+            return assetTypes.indexOf(selectedAssetType) >= 0;
+          });
+          if (!items.length) return;
+          html += '<section class="api-config-section">' +
+            '<div class="api-config-section__head"><div><h4>' + esc(category.label) + '</h4><p>' + esc(category.note || '') + '</p></div></div>' +
+            '<div class="api-source-list" data-api-category="' + esc(category.id) + '">';
+          items.forEach(function (item) {
+            html += '<div class="api-source-card" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '">' +
+              '<div class="api-source-card__handle" aria-hidden="true">drag</div>' +
+              '<div class="api-source-card__body">' +
+                '<div class="api-source-card__title"><strong>' + esc(item.label) + '</strong>' + (item.requiresKey ? '<span class="api-source-badge">API Key</span>' : '') + '</div>' +
+                '<div class="api-source-card__meta">' + esc(item.assetScope || '') + '</div>' +
+              '</div>' +
+              '<label class="api-toggle">' +
+                '<input type="checkbox" data-api-source-toggle="1" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '"' + (item.enabled ? ' checked' : '') + ' />' +
+                '<span>' + (item.enabled ? 'On' : 'Off') + '</span>' +
+              '</label>' +
+            '</div>';
+          });
+          html += '</div></section>';
+        });
+
+        html += '<div class="modal__actions"><button type="button" class="btn btn--primary" onclick="var m=document.getElementById(\'apiSourcesModal\');if(m){m.classList.add(\'hidden\');m.setAttribute(\'aria-hidden\',\'true\');}">Done</button></div>';
+        content.innerHTML = html;
+      }
+
+      PT.forceOpenApiSourcesModal = function (mode) {
+        var modal = document.getElementById('apiSourcesModal');
+        var content = document.getElementById('apiSourcesContent');
+        var selectedMode = mode === 'crypto' ? 'crypto' : (mode === 'stocks' ? 'stocks' : (((PT.State && PT.State.app && PT.State.app.mode) === 'crypto') ? 'crypto' : (PT.__apiSourcesModalMode || 'stocks')));
+        PT.__apiSourcesModalMode = selectedMode;
+        if (modal) {
+          modal.classList.remove('hidden');
+          modal.setAttribute('aria-hidden', 'false');
+        }
+        if (!content) return;
+
+        if (PT.State && PT.ApiSources && Array.isArray(PT.ApiSources.catalog)) {
+          var catalog = PT.ApiSources.catalog || [];
+          var prefs = (PT.State.app && PT.State.app.apiSourcePrefs) || defaultPrefsFromCatalog(catalog);
+          var model = {
+            categories: catalog.map(function (category) {
+            var sourceMap = {};
+            (category.sources || []).forEach(function (source) {
+              sourceMap[source.id] = source;
+            });
+            var ordered = Array.isArray(prefs[category.id]) ? prefs[category.id] : defaultPrefsFromCatalog([category])[category.id];
+            return {
+              id: category.id,
+              label: category.label,
+              note: category.note,
+              items: ordered.map(function (pref) {
+                var source = sourceMap[pref.id];
+                if (!source) return null;
+                return {
+                  id: source.id,
+                  label: source.label,
+                  enabled: pref.enabled !== false,
+                  requiresKey: !!source.requiresKey,
+                  assetTypes: Array.isArray(source.assetTypes) ? source.assetTypes.slice() : [],
+                  assetScope: Array.isArray(source.assetTypes)
+                    ? (source.assetTypes.length > 1 ? 'Stocks + Crypto' : (source.assetTypes[0] === 'crypto' ? 'Crypto' : 'Stocks'))
+                    : 'All'
+                };
+              }).filter(Boolean)
+            };
+          }),
+            autoRefresh: {
+              stocks: {
+                enabled: !!(PT.State.app && PT.State.app.stocksAutoRefreshEnabled),
+                intervalSec: (PT.State.app && PT.State.app.stocksAutoRefreshIntervalSec) || 600
+              },
+              crypto: {
+                enabled: !!(PT.State.app && PT.State.app.cryptoAutoRefreshEnabled),
+                intervalSec: (PT.State.app && PT.State.app.cryptoAutoRefreshIntervalSec) || 600
+              }
+            },
+            selectedMode: selectedMode
+          };
+          renderApiSourcesFallback(content, model);
+          return;
+        }
+
+        content.innerHTML = '<section class="api-config-section">' +
+          '<div class="api-config-section__head"><div><h4>API Sources</h4><p>' +
+          esc('The modal opened, but the app settings renderer is not ready yet.') +
+          '</p></div></div>' +
+          '<div class="modal__actions"><button type="button" class="btn btn--primary" onclick="var m=document.getElementById(\'apiSourcesModal\');if(m){m.classList.add(\'hidden\');m.setAttribute(\'aria-hidden\',\'true\');}">Close</button></div>' +
+        '</section>';
+      };
+    })();
+  </script>
 </body>
 </html>

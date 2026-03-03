@@ -64,6 +64,9 @@
       });
     },
     getQuote: function (asset) {
+      if (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function' && !PT.ApiSources.getOrdered('prices', 'crypto').length) {
+        return Promise.reject(new Error('No enabled crypto price source'));
+      }
       var id = asset.coinId || asset.id || String(asset).toLowerCase();
       var url = 'https://api.coingecko.com/api/v3/simple/price?ids=' +
         encodeURIComponent(id) +
@@ -81,6 +84,9 @@
       });
     },
     getQuotes: function (ids) {
+      if (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function' && !PT.ApiSources.getOrdered('prices', 'crypto').length) {
+        return Promise.reject(new Error('No enabled crypto price source'));
+      }
       var arr = Array.isArray(ids) ? ids : [];
       var unique = Array.from(new Set(arr.map(function (x) { return String(x || '').trim().toLowerCase(); }).filter(Boolean)));
       if (!unique.length) return Promise.resolve({});
@@ -104,6 +110,9 @@
       });
     },
     getOHLC: function (asset, days) {
+      if (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function' && !PT.ApiSources.getOrdered('chart', 'crypto').length) {
+        return Promise.reject(new Error('No enabled crypto chart source'));
+      }
       var id = asset.coinId || asset.id || String(asset).toLowerCase();
       var safeDays = days || 180;
       var url = 'https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(id) + '/ohlc?vs_currency=usd&days=' + encodeURIComponent(safeDays);

@@ -191,6 +191,10 @@
   PT.EventsAPI = {
     getEvents: function (asset) {
       if (!asset) return Promise.resolve([]);
+      var ordered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
+        ? PT.ApiSources.getOrdered('events', asset.type === 'crypto' ? 'crypto' : 'stock')
+        : [asset.type === 'crypto' ? 'coingecko' : 'yahoo'];
+      if (!ordered.length) return Promise.resolve([]);
       return asset.type === 'stock' ? stockEvents(asset) : cryptoEvents(asset);
     }
   };

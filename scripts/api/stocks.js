@@ -558,110 +558,107 @@
     },
     getQuote: function (asset, options) {
       options = options || {};
-      if (isNonUsYahooListing(asset)) {
-        if (options.skipYahooFallback) {
-          var stooqSymbolNonUs = normalizeStooqSymbol(asset);
-          var urlNonUs = 'https://stooq.com/q/l/?s=' + encodeURIComponent(stooqSymbolNonUs) + '&f=sd2t2ohlcv&h&e=csv';
-          return fetchTextMaybeProxyStock(urlNonUs, stooqSymbolNonUs, 'StockAPI.getQuote.nonUsDirect').then(function (csv) {
-            var rows = parseCsv(csv);
-            if (!rows.length) throw new Error('No stock quote rows');
-            var row = rows[0];
-            var close = num(row.Close);
-            if (close === null) throw new Error('Invalid stock quote');
-            return withStooqDailyChange(asset, {
-              price: close,
-              open: num(row.Open),
-              high: num(row.High),
-              low: num(row.Low),
-              volume: num(row.Volume),
-              date: row.Date || null,
-              time: row.Time || null,
-              market: asset.market || 'LSE',
-              source: urlNonUs
-            }, options);
-          });
+
+      function runSequential(order, runner, idx) {
+        var nextIdx = Number(idx || 0);
+        if (nextIdx >= order.length) return Promise.reject(new Error('No enabled quote source'));
+        return Promise.resolve()
+          .then(function () { return runner(order[nextIdx]); })
+          .catch(function () { return runSequential(order, runner, nextIdx + 1); });
+      }
+
+      function runStooqQuote() {
+        var stooqSymbol = normalizeStooqSymbol(asset);
+        var url = 'https://stooq.com/q/l/?s=' + encodeURIComponent(stooqSymbol) + '&f=sd2t2ohlcv&h&e=csv';
+        var debugLabel = isNonUsYahooListing(asset) ? 'StockAPI.getQuote.nonUsDirect' : 'StockAPI.getQuote';
+        return fetchTextMaybeProxyStock(url, stooqSymbol, debugLabel).then(function (csv) {
+          var rows = parseCsv(csv);
+          if (!rows.length) throw new Error('No stock quote rows');
+          var row = rows[0];
+          var close = num(row.Close);
+          if (close === null) throw new Error('Invalid stock quote');
+          return withStooqDailyChange(asset, {
+            price: close,
+            open: num(row.Open),
+            high: num(row.High),
+            low: num(row.Low),
+            volume: num(row.Volume),
+            date: row.Date || null,
+            time: row.Time || null,
+            market: asset.market || (isNonUsYahooListing(asset) ? 'LSE' : 'NASDAQ'),
+            source: url
+          }, options);
+        });
+      }
+
+      function runYahooQuote() {
+        if (options.skipYahooFallback) return Promise.reject(new Error('Yahoo disabled'));
+        return yahooQuoteFallback(asset);
+      }
+
+      function runTwelveDataQuote() {
+        if (!PT.StocksMarketData || typeof PT.StocksMarketData.getQuote !== 'function') {
+          return Promise.reject(new Error('TwelveData unavailable'));
         }
-        return yahooQuoteFallback(asset).catch(function () {
-          var stooqSymbolAlt = normalizeStooqSymbol(asset);
-          var urlAlt = 'https://stooq.com/q/l/?s=' + encodeURIComponent(stooqSymbolAlt) + '&f=sd2t2ohlcv&h&e=csv';
-          return fetchTextMaybeProxyStock(urlAlt, stooqSymbolAlt, 'StockAPI.getQuote.nonUsStooqFallback').then(function (csv) {
-            var rows = parseCsv(csv);
-            if (!rows.length) throw new Error('No stock quote rows');
-            var row = rows[0];
-            var close = num(row.Close);
-            if (close === null) throw new Error('Invalid stock quote');
-            return withStooqDailyChange(asset, {
-              price: close,
-              open: num(row.Open),
-              high: num(row.High),
-              low: num(row.Low),
-              volume: num(row.Volume),
-              date: row.Date || null,
-              time: row.Time || null,
-              market: asset.market || 'LSE',
-              source: urlAlt
-            }, options);
+        var providerSymbol = String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
+        if (!providerSymbol) return Promise.reject(new Error('Missing symbol'));
+        return PT.StocksMarketData.getQuote(providerSymbol, { force: !!options.force }).then(function (quote) {
+          if (!quote || !isFinite(Number(quote.price))) throw new Error('Invalid TwelveData quote');
+          return Object.assign({}, quote, {
+            market: asset.market || quote.market || 'NASDAQ',
+            source: quote.source || 'twelvedata'
           });
         });
       }
 
-      var stooqSymbol = normalizeStooqSymbol(asset);
-      var url = 'https://stooq.com/q/l/?s=' + encodeURIComponent(stooqSymbol) + '&f=sd2t2ohlcv&h&e=csv';
-      return fetchTextMaybeProxyStock(url, stooqSymbol, 'StockAPI.getQuote').then(function (csv) {
-        var rows = parseCsv(csv);
-        if (!rows.length) throw new Error('No stock quote rows');
-        var row = rows[0];
-        var close = num(row.Close);
-        if (close === null) throw new Error('Invalid stock quote');
-        var baseQuote = {
-          price: close,
-          open: num(row.Open),
-          high: num(row.High),
-          low: num(row.Low),
-          volume: num(row.Volume),
-          date: row.Date || null,
-          time: row.Time || null,
-          market: asset.market || 'NASDAQ',
-          source: url
-        };
-        if (options.skipYahooExtras) {
-          return withStooqDailyChange(asset, baseQuote, options);
-        }
-        return getYahooQuoteExtras(asset).then(function (extras) {
-          if (!extras) return baseQuote;
-          if (isFinite(Number(extras.regularMarketPrice))) {
-            baseQuote.price = Number(extras.regularMarketPrice);
-          }
-          return withStooqDailyChange(asset, Object.assign(baseQuote, extras), options);
-        });
-      }).catch(function () {
-        if (options.skipYahooFallback) {
-          throw new Error('Stooq quote failed');
-        }
-        return yahooQuoteFallback(asset);
-      });
+      var ordered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
+        ? PT.ApiSources.getOrdered('prices', 'stock')
+        : ['stooq', 'yahoo'];
+      if (options.skipYahooFallback) {
+        ordered = ordered.filter(function (sourceId) { return sourceId !== 'yahoo'; });
+      }
+      return runSequential(ordered, function (sourceId) {
+        if (sourceId === 'twelvedata') return runTwelveDataQuote();
+        if (sourceId === 'yahoo') return runYahooQuote();
+        return runStooqQuote();
+      }, 0);
     },
     getHistory: function (asset, limit) {
-      var stooqSymbol = normalizeStooqSymbol(asset);
-      var url = 'https://stooq.com/q/d/l/?s=' + encodeURIComponent(stooqSymbol) + '&i=d';
-      return fetchText(url, 'StockAPI.getHistory').then(function (csv) {
-        var rows = parseCsv(csv).map(function (row) {
-          return {
-            t: row.Date,
-            o: num(row.Open),
-            h: num(row.High),
-            l: num(row.Low),
-            c: num(row.Close),
-            v: num(row.Volume)
-          };
-        }).filter(function (row) {
-          return row.t && row.c !== null;
+      function runSequential(order, runner, idx) {
+        var nextIdx = Number(idx || 0);
+        if (nextIdx >= order.length) return Promise.reject(new Error('No enabled chart source'));
+        return Promise.resolve()
+          .then(function () { return runner(order[nextIdx]); })
+          .catch(function () { return runSequential(order, runner, nextIdx + 1); });
+      }
+
+      function runStooqHistory() {
+        var stooqSymbol = normalizeStooqSymbol(asset);
+        var url = 'https://stooq.com/q/d/l/?s=' + encodeURIComponent(stooqSymbol) + '&i=d';
+        return fetchText(url, 'StockAPI.getHistory').then(function (csv) {
+          var rows = parseCsv(csv).map(function (row) {
+            return {
+              t: row.Date,
+              o: num(row.Open),
+              h: num(row.High),
+              l: num(row.Low),
+              c: num(row.Close),
+              v: num(row.Volume)
+            };
+          }).filter(function (row) {
+            return row.t && row.c !== null;
+          });
+          if (!rows.length) throw new Error('No stock history rows');
+          return rows.slice(-(limit || 180));
         });
-        if (!rows.length) throw new Error('No stock history rows');
-        return rows.slice(-(limit || 180));
-      }).catch(function () {
-        return yahooHistoryFallback(asset, limit);
-      });
+      }
+
+      var ordered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
+        ? PT.ApiSources.getOrdered('chart', 'stock')
+        : ['stooq', 'yahoo'];
+      return runSequential(ordered, function (sourceId) {
+        return sourceId === 'yahoo' ? yahooHistoryFallback(asset, limit) : runStooqHistory();
+      }, 0);
     }
   };
 })();

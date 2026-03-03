@@ -182,34 +182,59 @@
   PT.NewsAPI = {
     getGeneralStocksNews: function (options) {
       var sourcePref = String(options && options.source || 'auto').toLowerCase();
-      if (sourcePref === 'tickertick') {
-        return tickertickNews({ symbol: 'SPY', type: 'stock' })
-          .catch(function () { return tickertickNews({ symbol: 'QQQ', type: 'stock' }); });
+      var enabledOrdered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
+        ? PT.ApiSources.getOrdered('news', 'stock')
+        : ['yahoo', 'tickertick'];
+      var ordered = sourcePref !== 'auto'
+        ? (enabledOrdered.indexOf(sourcePref) >= 0 ? [sourcePref] : enabledOrdered.slice())
+        : enabledOrdered.slice();
+
+      function run(idx) {
+        if (idx >= ordered.length) return Promise.reject(new Error('No enabled news source'));
+        var sourceId = ordered[idx];
+        var task = sourceId === 'tickertick'
+          ? tickertickNews({ symbol: 'SPY', type: 'stock' }).catch(function () { return tickertickNews({ symbol: 'QQQ', type: 'stock' }); })
+          : yahooGeneralStocksNews();
+        return task.catch(function () { return run(idx + 1); });
       }
-      return yahooGeneralStocksNews();
+
+      return run(0);
     },
     getNews: function (asset, options) {
       var sourcePref = String(options && options.source || 'auto').toLowerCase();
-      if (asset.type === 'crypto') {
-        var yahooCryptoSymbol = String(asset.symbol || '').toUpperCase() + '-USD';
-        if (sourcePref === 'yahoo') return yahooRssNews(yahooCryptoSymbol);
-        if (sourcePref === 'tickertick') return tickertickNews(asset);
-        return cryptoPanicNews().catch(function () {
-          return yahooRssNews(yahooCryptoSymbol);
-        });
+      var enabledOrdered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
+        ? PT.ApiSources.getOrdered('news', asset.type === 'crypto' ? 'crypto' : 'stock')
+        : ['yahoo', 'tickertick'];
+      var ordered = sourcePref !== 'auto'
+        ? (enabledOrdered.indexOf(sourcePref) >= 0 ? [sourcePref] : enabledOrdered.slice())
+        : enabledOrdered.slice();
+
+      function run(idx) {
+        if (idx >= ordered.length) return Promise.reject(new Error('No enabled news source'));
+        var sourceId = ordered[idx];
+        var task;
+        if (asset.type === 'crypto') {
+          var yahooCryptoSymbol = String(asset.symbol || '').toUpperCase() + '-USD';
+          if (sourceId === 'tickertick') task = tickertickNews(asset);
+          else if (sourceId === 'cryptopanic') task = cryptoPanicNews();
+          else task = yahooRssNews(yahooCryptoSymbol);
+        } else if (sourceId === 'tickertick') {
+          task = tickertickNews(asset).then(function (items) {
+            var filtered = filterSelectedStockNews(items, asset);
+            if (!filtered.length) throw new Error('No relevant selected-stock news');
+            return filtered;
+          });
+        } else {
+          task = yahooRssNews(String(asset.symbol || '').toUpperCase()).then(function (items) {
+            var filtered = filterSelectedStockNews(items, asset);
+            if (!filtered.length) throw new Error('No relevant selected-stock news');
+            return filtered;
+          });
+        }
+        return task.catch(function () { return run(idx + 1); });
       }
-      if (sourcePref === 'tickertick') {
-        return tickertickNews(asset).then(function (items) {
-          var filtered = filterSelectedStockNews(items, asset);
-          if (!filtered.length) throw new Error('No relevant selected-stock news');
-          return filtered;
-        });
-      }
-      return yahooRssNews(String(asset.symbol || '').toUpperCase()).then(function (items) {
-        var filtered = filterSelectedStockNews(items, asset);
-        if (!filtered.length) throw new Error('No relevant selected-stock news');
-        return filtered;
-      });
+
+      return run(0);
     }
   };
 })();

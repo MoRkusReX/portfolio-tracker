@@ -15,6 +15,7 @@
   var ASSET_DETAIL_REFRESH_STAMPS = {};
   var STOCKS_AUTO_REFRESH_TIMER = null;
   var CRYPTO_AUTO_REFRESH_TIMER = null;
+  var API_SOURCE_DRAG = null;
   var CRYPTO_PARTICLES = null;
   var AUTO_COLORS = ['#2cb6ff', '#14f1b2', '#f59e0b', '#fb7185', '#8b5cf6', '#22c55e', '#f97316', '#38bdf8', '#eab308', '#a78bfa'];
   var DEMO_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'AVGO', 'TSLA'];
@@ -39,6 +40,167 @@
   function setStatus(text) {
     state.app.status = text;
     ui.setStatus(text);
+  }
+
+  function apiSourceCatalog() {
+    var catalog = window.PT && window.PT.ApiSources && Array.isArray(window.PT.ApiSources.catalog)
+      ? window.PT.ApiSources.catalog
+      : [];
+    return clone(catalog);
+  }
+
+  function getApiSourcePrefEntry(categoryId, sourceId) {
+    var category = state.app.apiSourcePrefs && state.app.apiSourcePrefs[categoryId];
+    if (!Array.isArray(category)) return null;
+    for (var i = 0; i < category.length; i++) {
+      if (category[i] && category[i].id === sourceId) return category[i];
+    }
+    return null;
+  }
+
+  function syncTwelveDataEnabledFromPrefs() {
+    var entry = getApiSourcePrefEntry('prices', 'twelvedata');
+    state.app.twelveDataEnabled = !!(entry && entry.enabled);
+  }
+
+  function apiSourceCategoryView() {
+    return apiSourceCatalog().map(function (category) {
+      var sourceMap = {};
+      (category.sources || []).forEach(function (source) {
+        sourceMap[source.id] = source;
+      });
+      var orderedEntries = Array.isArray(state.app.apiSourcePrefs && state.app.apiSourcePrefs[category.id])
+        ? state.app.apiSourcePrefs[category.id]
+        : [];
+      return {
+        id: category.id,
+        label: category.label,
+        note: category.note,
+        items: orderedEntries.map(function (pref) {
+          var source = sourceMap[pref.id];
+          if (!source) return null;
+          return {
+            id: source.id,
+            label: source.label,
+            enabled: pref.enabled !== false,
+            requiresKey: !!source.requiresKey,
+            assetScope: Array.isArray(source.assetTypes)
+              ? (source.assetTypes.length > 1 ? 'Stocks + Crypto' : (source.assetTypes[0] === 'crypto' ? 'Crypto' : 'Stocks'))
+              : 'All'
+          };
+        }).filter(Boolean)
+      };
+    });
+  }
+
+  function refreshApiSourcesModal() {
+    if (!ui || !ui.el || !ui.el.apiSourcesModal || ui.el.apiSourcesModal.classList.contains('hidden')) return;
+    if (window.PT && typeof window.PT.forceOpenApiSourcesModal === 'function') {
+      window.PT.forceOpenApiSourcesModal(window.PT.__apiSourcesModalMode || (state.app.mode === 'crypto' ? 'crypto' : 'stocks'));
+      return;
+    }
+    ui.renderApiSourcesConfig({
+      categories: apiSourceCategoryView(),
+      autoRefresh: {
+        stocks: {
+          enabled: !!state.app.stocksAutoRefreshEnabled,
+          intervalSec: state.app.stocksAutoRefreshIntervalSec || 600
+        },
+        crypto: {
+          enabled: !!state.app.cryptoAutoRefreshEnabled,
+          intervalSec: state.app.cryptoAutoRefreshIntervalSec || 600
+        }
+      }
+    });
+  }
+
+  function openApiSourcesModal(mode) {
+    if (window.PT && typeof window.PT.forceOpenApiSourcesModal === 'function') {
+      window.PT.forceOpenApiSourcesModal(mode || window.PT.__apiSourcesModalMode || (state.app.mode === 'crypto' ? 'crypto' : 'stocks'));
+      return;
+    }
+    var modalEl = document.getElementById('apiSourcesModal');
+    var contentEl = document.getElementById('apiSourcesContent');
+    if (ui && ui.el) {
+      if (!ui.el.apiSourcesModal && modalEl) ui.el.apiSourcesModal = modalEl;
+      if (!ui.el.apiSourcesContent && contentEl) ui.el.apiSourcesContent = contentEl;
+    }
+    if (modalEl) {
+      modalEl.classList.remove('hidden');
+      modalEl.setAttribute('aria-hidden', 'false');
+    }
+    try {
+      if (ui && typeof ui.renderApiSourcesConfig === 'function') {
+        ui.renderApiSourcesConfig({
+          categories: apiSourceCategoryView(),
+          autoRefresh: {
+            stocks: {
+              enabled: !!state.app.stocksAutoRefreshEnabled,
+              intervalSec: state.app.stocksAutoRefreshIntervalSec || 600
+            },
+            crypto: {
+              enabled: !!state.app.cryptoAutoRefreshEnabled,
+              intervalSec: state.app.cryptoAutoRefreshIntervalSec || 600
+            }
+          },
+          selectedMode: mode || (state.app.mode === 'crypto' ? 'crypto' : 'stocks')
+        });
+      } else if (contentEl) {
+        contentEl.innerHTML = '<section class="api-config-section"><div class="api-config-section__head"><div><h4>API source settings unavailable</h4><p>UI layer not initialized.</p></div></div></section>';
+      }
+      setStatus('API sources opened');
+    } catch (err) {
+      if (contentEl) {
+        contentEl.innerHTML = '<section class="api-config-section">' +
+          '<div class="api-config-section__head"><div><h4>Unable to open API source settings</h4><p>' +
+          String((err && err.message) || 'Unknown error')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;') +
+          '</p></div></div>' +
+          '<div class="modal__actions"><button type="button" id="apiSourcesDoneBtn" class="btn btn--primary">Close</button></div>' +
+        '</section>';
+      }
+      setStatus('API sources UI error');
+    }
+  }
+
+  function closeApiSourcesModal() {
+    var modalEl = document.getElementById('apiSourcesModal');
+    if (ui && typeof ui.closeApiSourcesModal === 'function') {
+      ui.closeApiSourcesModal();
+      return;
+    }
+    if (modalEl) {
+      modalEl.classList.add('hidden');
+      modalEl.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  PT.openApiSourcesModal = openApiSourcesModal;
+  PT.closeApiSourcesModal = closeApiSourcesModal;
+
+  function moveApiSource(categoryId, sourceId, targetIndex) {
+    var list = state.app.apiSourcePrefs && state.app.apiSourcePrefs[categoryId];
+    if (!Array.isArray(list)) return;
+    var fromIndex = list.findIndex(function (entry) { return entry && entry.id === sourceId; });
+    if (fromIndex < 0) return;
+    var boundedTarget = Math.max(0, Math.min(list.length, Number(targetIndex) || 0));
+    var item = list.splice(fromIndex, 1)[0];
+    if (fromIndex < boundedTarget) boundedTarget -= 1;
+    list.splice(boundedTarget, 0, item);
+    syncTwelveDataEnabledFromPrefs();
+    renderAll();
+    refreshApiSourcesModal();
+  }
+
+  function setApiSourceEnabled(categoryId, sourceId, enabled) {
+    var entry = getApiSourcePrefEntry(categoryId, sourceId);
+    if (!entry) return;
+    entry.enabled = !!enabled;
+    syncTwelveDataEnabledFromPrefs();
+    renderAll();
+    refreshApiSourcesModal();
   }
 
   function localSearchScore(item, q) {
@@ -151,18 +313,29 @@
       state.portfolio = savedPortfolio;
     }
 
+    applySavedSettings(savedSettings);
+
+    state.caches = savedCache || {};
+  }
+
+  function applySavedSettings(savedSettings) {
     if (savedSettings) {
+      var apiSourceHelpers = window.PT && window.PT.ApiSources;
       state.app.theme = savedSettings.theme === 'light' ? 'light' : 'dark';
       state.app.layoutMode = savedSettings.layoutMode === 'wide' ? 'wide' : 'narrow';
       state.app.hideHoldings = !!savedSettings.hideHoldings;
       state.app.stocksAutoRefreshEnabled = !!savedSettings.stocksAutoRefreshEnabled;
       state.app.cryptoAutoRefreshEnabled = !!savedSettings.cryptoAutoRefreshEnabled;
+      state.app.stocksAutoRefreshIntervalSec = Math.max(15, Number(savedSettings.stocksAutoRefreshIntervalSec || 600) || 600);
+      state.app.cryptoAutoRefreshIntervalSec = Math.max(15, Number(savedSettings.cryptoAutoRefreshIntervalSec || 600) || 600);
       if (Object.prototype.hasOwnProperty.call(savedSettings, 'cryptoParticlesEnabled')) {
         state.app.cryptoParticlesEnabled = !!savedSettings.cryptoParticlesEnabled;
       }
       state.app.demoModeEnabled = !!savedSettings.demoModeEnabled;
       state.app.apiDebugEnabled = !!savedSettings.apiDebugEnabled;
-      state.app.twelveDataEnabled = !!savedSettings.twelveDataEnabled;
+      state.app.apiSourcePrefs = apiSourceHelpers && typeof apiSourceHelpers.normalizePrefs === 'function'
+        ? apiSourceHelpers.normalizePrefs(savedSettings.apiSourcePrefs)
+        : (savedSettings.apiSourcePrefs || state.app.apiSourcePrefs);
       state.app.newsScopeStocks = savedSettings.newsScopeStocks === 'selected' ? 'selected' : 'general';
       state.app.sortBy = savedSettings.sortBy || 'az';
       state.app.newsSourceStocks = savedSettings.newsSourceStocks || 'auto';
@@ -175,9 +348,17 @@
         else state.app.selectedStocksKey = savedSettings.selectedKey;
       }
       state.app.selectedKey = getStoredSelectionForMode(state.app.mode);
+      if (!savedSettings.apiSourcePrefs && Object.prototype.hasOwnProperty.call(savedSettings, 'twelveDataEnabled')) {
+        var pricePrefs = state.app.apiSourcePrefs && state.app.apiSourcePrefs.prices;
+        if (Array.isArray(pricePrefs)) {
+          pricePrefs.forEach(function (entry) {
+            if (entry.id === 'twelvedata') entry.enabled = !!savedSettings.twelveDataEnabled;
+          });
+        }
+      }
     }
 
-    state.caches = savedCache || {};
+    state.app.twelveDataEnabled = (window.PT && window.PT.ApiSources && window.PT.ApiSources.getOrdered('prices', 'stock', state.app.apiSourcePrefs).indexOf('twelvedata') >= 0);
   }
 
   function getCachedAny(key) {
@@ -337,17 +518,20 @@
     storage.saveCache(state.caches);
   }
 
-  function persist() {
-    var settingsPayload = {
+  function buildSettingsPayload() {
+    return {
       theme: state.app.theme,
       layoutMode: state.app.layoutMode,
       hideHoldings: !!state.app.hideHoldings,
       stocksAutoRefreshEnabled: !!state.app.stocksAutoRefreshEnabled,
       cryptoAutoRefreshEnabled: !!state.app.cryptoAutoRefreshEnabled,
+      stocksAutoRefreshIntervalSec: Math.max(15, Number(state.app.stocksAutoRefreshIntervalSec || 600) || 600),
+      cryptoAutoRefreshIntervalSec: Math.max(15, Number(state.app.cryptoAutoRefreshIntervalSec || 600) || 600),
       cryptoParticlesEnabled: !!state.app.cryptoParticlesEnabled,
       demoModeEnabled: !!state.app.demoModeEnabled,
       apiDebugEnabled: !!state.app.apiDebugEnabled,
       twelveDataEnabled: !!state.app.twelveDataEnabled,
+      apiSourcePrefs: state.app.apiSourcePrefs,
       newsScopeStocks: state.app.newsScopeStocks === 'selected' ? 'selected' : 'general',
       sortBy: state.app.sortBy,
       newsSourceStocks: state.app.newsSourceStocks || 'auto',
@@ -357,6 +541,10 @@
       selectedStocksKey: state.app.selectedStocksKey || null,
       selectedCryptoKey: state.app.selectedCryptoKey || null
     };
+  }
+
+  function persist() {
+    var settingsPayload = buildSettingsPayload();
 
     // localStorage quota can be exhausted by cached history/news; never let that block portfolio autosave.
     var portfolioOk = storage.savePortfolio(state.portfolio);
@@ -521,7 +709,7 @@
     ui.setModeTabs(state.app.mode);
     ui.setNewsSourceValue(state.app.mode === 'crypto' ? state.app.newsSourceCrypto : state.app.newsSourceStocks);
     ui.setNewsScopeToggle(state.app.mode, state.app.newsScopeStocks, !!getSelectedAsset('stocks'));
-    ui.el.sortSelect.value = state.app.sortBy;
+    ui.setSortValue(state.app.sortBy);
     var items = getModeComputedItems(state.app.mode);
     ensureValidSelection(state.app.mode, items);
     setStoredSelectionForMode(state.app.mode, state.app.selectedKey);
@@ -1279,22 +1467,6 @@
         }).then(function (quote) {
           if (quote && !isFinite(Number(quote.fetchedAt))) quote.fetchedAt = Date.now();
           return quote;
-        }).catch(function (err) {
-          var providerSymbol = stockProviderSymbol(asset);
-          if (!isTwelveDataEnabled() || !PT.StocksMarketData || typeof PT.StocksMarketData.getQuote !== 'function' || !providerSymbol) {
-            throw err;
-          }
-          return PT.StocksMarketData.getQuote(providerSymbol, {
-            ttlMs: 1000 * 20,
-            force: false,
-            reason: 'asset-select-fallback'
-          }).then(function (quote) {
-            if (quote && !isFinite(Number(quote.fetchedAt))) quote.fetchedAt = Date.now();
-            if (quote && quote.price == null && isFinite(Number(quote.regularMarketPrice))) {
-              quote.price = Number(quote.regularMarketPrice);
-            }
-            return quote;
-          });
         });
       }).then(function (quote) {
         state.market.stocks[asset.id] = quote;
@@ -1496,33 +1668,11 @@
     });
   }
 
-  function stockProviderSymbol(asset) {
-    return String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
-  }
-
-  function isTwelveDataEnabled() {
-    return !!(state && state.app && state.app.twelveDataEnabled);
-  }
-
   function stockQuoteCacheKey(asset) {
     return 'quote:stock:' + (asset.stooqSymbol || asset.symbol);
   }
 
-  function mergeQuotePreservingValues(prev, next) {
-    var merged = Object.assign({}, prev || {});
-    var key;
-    for (key in next) {
-      if (!Object.prototype.hasOwnProperty.call(next, key)) continue;
-      var value = next[key];
-      if (value == null) continue;
-      if (typeof value === 'number' && !isFinite(value)) continue;
-      if (typeof value === 'string' && !value.trim()) continue;
-      merged[key] = value;
-    }
-    return merged;
-  }
-
-  // Stocks-only quotes refresh path. Free sources first; TwelveData is optional paid fallback.
+  // Stocks-only quotes refresh path. Source order comes from the API source settings.
   function refreshStocksQuotesOnly(options) {
     options = options || {};
     var assets = (state.portfolio && state.portfolio.stocks ? state.portfolio.stocks : []).slice();
@@ -1530,42 +1680,22 @@
       renderAll();
       return Promise.resolve({ empty: true });
     }
-    if (isTwelveDataEnabled() && (!PT.StocksMarketData || typeof PT.StocksMarketData.getQuotes !== 'function')) {
-      setStatus('Stocks quote service unavailable');
-      return Promise.resolve({ failed: true });
-    }
-
-    var symbolToAssets = {};
-    var symbols = [];
-    assets.forEach(function (asset) {
-      var sym = stockProviderSymbol(asset);
-      if (!sym) return;
-      if (!symbolToAssets[sym]) {
-        symbolToAssets[sym] = [];
-        symbols.push(sym);
-      }
-      symbolToAssets[sym].push(asset);
-    });
 
     setStatus('Refreshing stock quotes...');
     var prevCloseRunCache = new Map();
 
     return Promise.allSettled(assets.map(function (asset) {
       return PT.StockAPI.getQuote(asset, {
-        skipYahooExtras: true,
-        skipYahooFallback: true,
+        force: !!options.force,
         prevCloseRunCache: prevCloseRunCache,
         prevCloseHint: getStockPrevCloseHint(asset),
         skipPrevCloseNetwork: true
       });
-    })).then(function (freeResults) {
+    })).then(function (results) {
       var updated = 0;
       var cachedOnly = 0;
-      var failedSymbols = [];
-      var reason = String(options.reason || '');
-      var useTwelveDataForAll = isTwelveDataEnabled() && reason === 'manual';
 
-      freeResults.forEach(function (res, idx) {
+      results.forEach(function (res, idx) {
         var asset = assets[idx];
         if (res.status === 'fulfilled' && res.value) {
           var quote = res.value;
@@ -1574,84 +1704,24 @@
           storage.setCached(state.caches, stockQuoteCacheKey(asset), quote);
           updated += 1;
         } else {
-          var sym = stockProviderSymbol(asset);
-          if (sym) failedSymbols.push(sym);
           if (state.market.stocks[asset.id]) cachedOnly += 1;
         }
       });
 
       storage.saveCache(state.caches);
       renderAll();
-
-      var tdSymbols = useTwelveDataForAll ? symbols.slice() : failedSymbols.slice();
-      if (!isTwelveDataEnabled() || !tdSymbols.length) {
-        var freeTime = new Date().toLocaleTimeString();
-        if (updated <= 0 && cachedOnly > 0) setStatus('Stocks quotes unavailable, using cached values • ' + freeTime);
-        else if (updated <= 0) setStatus('Stocks quote refresh failed • ' + freeTime);
-        else if (failedSymbols.length) setStatus('Stocks quotes partial refresh (free sources only) • ' + freeTime);
-        else setStatus('Stocks quotes refreshed • ' + freeTime);
-        return { updated: updated, meta: { failed: failedSymbols.length, staleUsed: cachedOnly } };
+      var failed = assets.length - updated;
+      var nowText = new Date().toLocaleTimeString();
+      if (updated <= 0 && cachedOnly > 0) {
+        setStatus('Stocks quotes unavailable, using cached values • ' + nowText);
+      } else if (updated <= 0) {
+        setStatus('Stocks quote refresh failed • ' + nowText);
+      } else if (failed > 0) {
+        setStatus('Stocks quotes partial refresh • ' + nowText);
+      } else {
+        setStatus('Stocks quotes refreshed • ' + nowText);
       }
-
-      setStatus('Free quotes loaded • Applying 12D fallback...');
-      return PT.StocksMarketData.getQuotes(tdSymbols, {
-        ttlMs: 1000 * 60,
-        force: !!options.force,
-        reason: (options.reason || 'manual') + (useTwelveDataForAll ? '-td-all' : '-td-fallback')
-      }).then(function (result) {
-        var quotes = result && result.quotes ? result.quotes : {};
-        var meta = result && result.meta ? result.meta : {};
-        var tdUpdated = 0;
-        tdSymbols.forEach(function (sym) {
-          var quote = quotes[sym];
-          if (!quote) return;
-          var tdHasUsablePrice = isFinite(Number(quote.regularMarketPrice)) || isFinite(Number(quote.price));
-          if (!tdHasUsablePrice) return;
-          symbolToAssets[sym].forEach(function (asset) {
-            var prev = state.market.stocks[asset.id] || {};
-            var merged = mergeQuotePreservingValues(prev, Object.assign({}, quote, {
-              fetchedAt: isFinite(Number(quote.fetchedAt)) ? Number(quote.fetchedAt) : Date.now()
-            }));
-            state.market.stocks[asset.id] = merged;
-            storage.setCached(state.caches, stockQuoteCacheKey(asset), merged);
-            tdUpdated += 1;
-          });
-        });
-        updated += tdUpdated;
-        storage.saveCache(state.caches);
-        renderAll();
-
-        var nowText = new Date().toLocaleTimeString();
-        var failed = Number(meta.failed || 0);
-        var staleUsed = Number(meta.staleUsed || 0) + cachedOnly;
-        if (updated <= 0 && staleUsed > 0) {
-          setStatus('Stocks quotes unavailable, using cached values • ' + nowText);
-        } else if (updated <= 0 && failed > 0) {
-          setStatus('Stocks quote refresh failed • ' + nowText);
-        } else if (failed > 0) {
-          setStatus('Stocks quotes partial refresh (some failed) • ' + nowText);
-        } else {
-          setStatus('Stocks quotes refreshed • ' + nowText);
-        }
-        return { updated: updated, meta: { failed: failed, staleUsed: staleUsed } };
-      }).catch(function () {
-        renderAll();
-        var t = new Date().toLocaleTimeString();
-        if (updated > 0) {
-          setStatus('12D fallback failed • showing free-source quotes • ' + t);
-          return { updated: updated, meta: { failed: failedSymbols.length, staleUsed: cachedOnly } };
-        }
-        if (cachedOnly > 0) {
-          setStatus('Stocks quotes unavailable, using cached values • ' + t);
-          return { updated: 0, meta: { failed: assets.length, staleUsed: cachedOnly } };
-        }
-        setStatus('Stocks quote refresh failed • ' + t);
-        return { failed: true };
-      });
-    }).catch(function () {
-      renderAll();
-      setStatus('Stocks quote refresh failed • ' + new Date().toLocaleTimeString());
-      return { failed: true };
+      return { updated: updated, meta: { failed: failed, staleUsed: cachedOnly } };
     });
   }
 
@@ -1708,9 +1778,10 @@
   function ensureStocksAutoRefreshTimer() {
     clearStocksAutoRefreshTimer();
     if (!state.app.stocksAutoRefreshEnabled) return;
+    var intervalMs = Math.max(15000, (Number(state.app.stocksAutoRefreshIntervalSec || 600) || 600) * 1000);
     STOCKS_AUTO_REFRESH_TIMER = setInterval(function () {
       refreshStocksQuotesOnly({ force: true, reason: 'auto' });
-    }, 1000 * 60 * 10);
+    }, intervalMs);
   }
 
   function clearCryptoAutoRefreshTimer() {
@@ -1723,12 +1794,13 @@
   function ensureCryptoAutoRefreshTimer() {
     clearCryptoAutoRefreshTimer();
     if (!state.app.cryptoAutoRefreshEnabled) return;
+    var intervalMs = Math.max(15000, (Number(state.app.cryptoAutoRefreshIntervalSec || 600) || 600) * 1000);
     CRYPTO_AUTO_REFRESH_TIMER = setInterval(function () {
       if (state.app.mode !== 'crypto') return;
       refreshVisibleData().then(function () {
         setStatus('Crypto auto refresh • ' + new Date().toLocaleTimeString());
       });
-    }, 1000 * 60 * 10);
+    }, intervalMs);
   }
 
   function setStocksAutoRefreshEnabled(enabled, opts) {
@@ -1751,9 +1823,25 @@
     }
   }
 
+  function setAutoRefreshInterval(mode, intervalSec) {
+    var safeSec = Math.max(15, Number(intervalSec || 600) || 600);
+    if (mode === 'crypto') {
+      state.app.cryptoAutoRefreshIntervalSec = safeSec;
+      ensureCryptoAutoRefreshTimer();
+    } else {
+      state.app.stocksAutoRefreshIntervalSec = safeSec;
+      ensureStocksAutoRefreshTimer();
+    }
+    renderAll();
+    refreshApiSourcesModal();
+  }
+
   function setTwelveDataEnabled(enabled) {
+    var entry = getApiSourcePrefEntry('prices', 'twelvedata');
+    if (entry) entry.enabled = !!enabled;
     state.app.twelveDataEnabled = !!enabled;
     renderAll();
+    refreshApiSourcesModal();
     setStatus('TwelveData ' + (state.app.twelveDataEnabled ? 'enabled' : 'disabled'));
   }
 
@@ -1927,12 +2015,17 @@
     ui.el.themeToggle.addEventListener('click', applyThemeToggle);
     if (ui.el.layoutToggle) ui.el.layoutToggle.addEventListener('click', applyLayoutToggle);
     if (ui.el.demoModeToggle) ui.el.demoModeToggle.addEventListener('click', applyDemoModeToggle);
+    if (ui.el.apiSourcesBtn) ui.el.apiSourcesBtn.addEventListener('click', openApiSourcesModal);
     if (ui.el.apiDebugToggle) ui.el.apiDebugToggle.addEventListener('click', applyApiDebugToggle);
     if (ui.el.holdingsPrivacyToggle) ui.el.holdingsPrivacyToggle.addEventListener('click', applyHoldingsPrivacyToggle);
     if (ui.el.cryptoParticlesToggle) ui.el.cryptoParticlesToggle.addEventListener('click', applyCryptoParticlesToggle);
     ui.el.addAssetBtn.addEventListener('click', function () { openAddModal(null); });
     ui.el.exportBtn.addEventListener('click', function () {
-      storage.exportPortfolioFile({ exportedAt: new Date().toISOString(), portfolio: state.portfolio });
+      storage.exportPortfolioFile({
+        exportedAt: new Date().toISOString(),
+        portfolio: state.portfolio,
+        settings: buildSettingsPayload()
+      });
       setStatus('Portfolio exported');
     });
     ui.el.importInput.addEventListener('change', function (e) {
@@ -1942,10 +2035,14 @@
         var p = payload.portfolio || payload;
         if (!p || !Array.isArray(p.stocks) || !Array.isArray(p.crypto)) throw new Error('Expected {stocks, crypto}');
         state.portfolio = p;
-        state.app.demoModeEnabled = false;
-        state.app.selectedKey = null;
-        state.app.selectedStocksKey = null;
-        state.app.selectedCryptoKey = null;
+        if (payload && payload.settings && typeof payload.settings === 'object') {
+          applySavedSettings(payload.settings);
+        } else {
+          state.app.demoModeEnabled = false;
+          state.app.selectedKey = null;
+          state.app.selectedStocksKey = null;
+          state.app.selectedCryptoKey = null;
+        }
         storage.clearDemoPortfolioBackup();
         renderAll();
         if (state.app.mode === 'crypto' && state.app.cryptoAutoRefreshEnabled) {
@@ -1985,6 +2082,88 @@
     if (ui.el.twelveDataToggle) {
       ui.el.twelveDataToggle.addEventListener('click', function () {
         setTwelveDataEnabled(!state.app.twelveDataEnabled);
+      });
+    }
+    if (ui.el.apiSourcesModalCloseBtn) ui.el.apiSourcesModalCloseBtn.addEventListener('click', closeApiSourcesModal);
+    if (ui.el.apiSourcesModal) {
+      ui.el.apiSourcesModal.addEventListener('click', function (e) {
+        if (e.target && e.target.getAttribute('data-close-api-sources-modal') === '1') closeApiSourcesModal();
+      });
+    }
+    if (ui.el.apiSourcesContent) {
+      ui.el.apiSourcesContent.addEventListener('click', function (e) {
+        var doneBtn = e.target.closest('#apiSourcesDoneBtn');
+        if (doneBtn) {
+          closeApiSourcesModal();
+          return;
+        }
+      });
+      ui.el.apiSourcesContent.addEventListener('change', function (e) {
+        var toggle = e.target.closest('[data-api-source-toggle]');
+        if (toggle) {
+          setApiSourceEnabled(toggle.getAttribute('data-api-category'), toggle.getAttribute('data-api-source'), !!toggle.checked);
+          return;
+        }
+        var autoToggle = e.target.closest('[data-api-auto-toggle]');
+        if (autoToggle) {
+          var modeKeyToggle = autoToggle.getAttribute('data-api-auto-toggle') || 'stocks';
+          if (modeKeyToggle === 'crypto') {
+            setCryptoAutoRefreshEnabled(!!autoToggle.checked);
+          } else {
+            setStocksAutoRefreshEnabled(!!autoToggle.checked);
+          }
+          refreshApiSourcesModal();
+          return;
+        }
+        var autoMin = e.target.closest('[data-api-auto-min], [data-api-auto-sec]');
+        if (autoMin) {
+          var modeKey = autoMin.getAttribute('data-api-auto-min') || autoMin.getAttribute('data-api-auto-sec') || 'stocks';
+          var minInput = ui.el.apiSourcesContent.querySelector('[data-api-auto-min="' + modeKey + '"]');
+          var secInput = ui.el.apiSourcesContent.querySelector('[data-api-auto-sec="' + modeKey + '"]');
+          var mins = Math.max(0, Number(minInput && minInput.value || 0) || 0);
+          var secs = Math.max(0, Math.min(59, Number(secInput && secInput.value || 0) || 0));
+          if (secInput) secInput.value = String(secs);
+          setAutoRefreshInterval(modeKey, mins * 60 + secs);
+        }
+      });
+      ui.el.apiSourcesContent.addEventListener('dragstart', function (e) {
+        var card = e.target.closest('[data-api-drag]');
+        if (!card) return;
+        API_SOURCE_DRAG = {
+          category: card.getAttribute('data-api-category'),
+          sourceId: card.getAttribute('data-api-source')
+        };
+        card.classList.add('is-dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', API_SOURCE_DRAG.sourceId || '');
+        }
+      });
+      ui.el.apiSourcesContent.addEventListener('dragend', function (e) {
+        var card = e.target.closest('[data-api-drag]');
+        if (card) card.classList.remove('is-dragging');
+        API_SOURCE_DRAG = null;
+      });
+      ui.el.apiSourcesContent.addEventListener('dragover', function (e) {
+        var list = e.target.closest('[data-api-category]');
+        if (!list || !API_SOURCE_DRAG || list.getAttribute('data-api-category') !== API_SOURCE_DRAG.category) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      });
+      ui.el.apiSourcesContent.addEventListener('drop', function (e) {
+        var list = e.target.closest('.api-source-list');
+        if (!list || !API_SOURCE_DRAG || list.getAttribute('data-api-category') !== API_SOURCE_DRAG.category) return;
+        e.preventDefault();
+        var cards = Array.prototype.slice.call(list.querySelectorAll('.api-source-card'));
+        var targetCard = e.target.closest('.api-source-card');
+        var targetIndex = cards.length;
+        if (targetCard) {
+          targetIndex = cards.indexOf(targetCard);
+          var rect = targetCard.getBoundingClientRect();
+          var after = e.clientX > rect.left + rect.width / 2;
+          if (after) targetIndex += 1;
+        }
+        moveApiSource(API_SOURCE_DRAG.category, API_SOURCE_DRAG.sourceId, targetIndex);
       });
     }
     ui.el.newsRefreshBtn.addEventListener('click', function () {
@@ -2145,6 +2324,10 @@
 
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      if (ui.el.apiSourcesModal && !ui.el.apiSourcesModal.classList.contains('hidden')) {
+        closeApiSourcesModal();
+        return;
+      }
       if (ui.el.positionModal && !ui.el.positionModal.classList.contains('hidden')) {
         closePositionActionModal();
         return;

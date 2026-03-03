@@ -5,6 +5,7 @@
 }
 
 html[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #071019;
   --text: #ecf6ff;
   --muted: #97abc3;
@@ -28,6 +29,7 @@ html[data-theme="dark"] {
 }
 
 html[data-theme="light"] {
+  color-scheme: light;
   --bg: #eef5fb;
   --text: #0b1826;
   --muted: #55697f;
