@@ -20,6 +20,7 @@
   PT.ChartManager = {
     pie: null,
     line: null,
+    lineCharts: {},
     dominance: null,
     renderAllocation: function (canvas, fallbackEl, labels, values) {
       destroy(this.pie);
@@ -64,14 +65,16 @@
       }
       this.pie.update('none');
     },
-    renderAssetLine: function (canvas, fallbackEl, labels, values, label) {
-      destroy(this.line);
+    renderAssetLine: function (canvas, fallbackEl, labels, values, label, key) {
+      var chartKey = String(key || 'detail');
+      if (!this.lineCharts) this.lineCharts = {};
+      destroy(this.lineCharts[chartKey]);
       if (!chartAvailable() || !canvas) {
         if (fallbackEl) fallbackEl.classList.remove('hidden');
         return;
       }
       if (fallbackEl) fallbackEl.classList.add('hidden');
-      this.line = new Chart(canvas.getContext('2d'), {
+      this.lineCharts[chartKey] = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: {
           labels: labels,
@@ -106,6 +109,7 @@
           }
         }
       });
+      if (chartKey === 'detail') this.line = this.lineCharts[chartKey];
     },
     renderBtcDominance: function (canvas, fallbackEl, labels, values) {
       destroy(this.dominance);

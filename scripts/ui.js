@@ -43,6 +43,19 @@
       .replace(/'/g, '&#39;');
   }
 
+  function iconMarkup(name) {
+    var icons = {
+      layoutWide: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 9.5h8M8 12h8M8 14.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+      layoutNarrow: '<svg viewBox="0 0 24 24" focusable="false"><rect x="7" y="3" width="10" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 7.5h4M10 11h4M10 14.5h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+      eye: '<svg viewBox="0 0 24 24" focusable="false"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+      eyeOff: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 4.5 21 19.5M10.6 6.2A10.4 10.4 0 0 1 12 6c6 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.3 3.8M6.3 9A17 17 0 0 0 2.5 12s3.5 6 9.5 6a10 10 0 0 0 3-.4M10 12a2 2 0 0 0 3 1.7 2.1 2.1 0 0 0 .5-2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      moon: '<svg viewBox="0 0 24 24" focusable="false"><path d="M14.5 3.5a8 8 0 1 0 6 13.5A9 9 0 1 1 14.5 3.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+      sun: '<svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+      bug: '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 8.5c2.7 0 4.8 2 4.8 4.6v2.2c0 2.7-2.1 4.9-4.8 4.9s-4.8-2.2-4.8-4.9v-2.2c0-2.6 2.1-4.6 4.8-4.6Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.6 8.3V6.9a2.4 2.4 0 1 1 4.8 0v1.4M4.8 10.1h2.4M16.8 10.1h2.4M5.5 15h2M16.5 15h2M8.6 5.4 7.2 4M15.4 5.4 16.8 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    };
+    return '<span class="btn__icon" aria-hidden="true">' + (icons[name] || '') + '</span>';
+  }
+
   PT.UI = {
     el: {},
     init: function () {
@@ -130,10 +143,26 @@
         apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
         apiSourcesContent: qs('apiSourcesContent'),
         indicatorsPanel: qs('indicatorsPanel'),
+        indicatorExplorerBtn: qs('indicatorExplorerBtn'),
         indicatorsAssetLabel: qs('indicatorsAssetLabel'),
         indicatorsOverallPill: qs('indicatorsOverallPill'),
         indicatorsMeta: qs('indicatorsMeta'),
         indicatorsTimeframes: qs('indicatorsTimeframes'),
+        indicatorExplorerModal: qs('indicatorExplorerModal'),
+        indicatorExplorerCloseBtn: qs('indicatorExplorerCloseBtn'),
+        indicatorExplorerStocksTab: qs('indicatorExplorerStocksTab'),
+        indicatorExplorerCryptoTab: qs('indicatorExplorerCryptoTab'),
+        indicatorExplorerSearchInput: qs('indicatorExplorerSearchInput'),
+        indicatorExplorerSearchList: qs('indicatorExplorerSearchList'),
+        indicatorExplorerChartTitle: qs('indicatorExplorerChartTitle'),
+        indicatorExplorerChartMeta: qs('indicatorExplorerChartMeta'),
+        indicatorExplorerChart: qs('indicatorExplorerChart'),
+        indicatorExplorerChartFallback: qs('indicatorExplorerChartFallback'),
+        indicatorExplorerAssetLabel: qs('indicatorExplorerAssetLabel'),
+        indicatorExplorerModeLabel: qs('indicatorExplorerModeLabel'),
+        indicatorExplorerOverallPill: qs('indicatorExplorerOverallPill'),
+        indicatorExplorerMeta: qs('indicatorExplorerMeta'),
+        indicatorExplorerTimeframes: qs('indicatorExplorerTimeframes'),
         assetTypeInput: qs('assetTypeInput'),
         assetSearchInput: qs('assetSearchInput'),
         assetSelectedId: qs('assetSelectedId'),
@@ -149,19 +178,27 @@
     pctClass: pctClass,
     setTheme: function (theme) {
       document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark');
+      if (this.el.themeToggle) {
+        var isLight = theme === 'light';
+        this.el.themeToggle.innerHTML = iconMarkup(isLight ? 'sun' : 'moon');
+        this.el.themeToggle.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+        this.el.themeToggle.setAttribute('aria-label', isLight ? 'Light theme' : 'Dark theme');
+      }
     },
     setLayoutMode: function (mode) {
       var isWide = mode === 'wide';
       document.documentElement.setAttribute('data-layout', isWide ? 'wide' : 'narrow');
       if (this.el.layoutToggle) {
-        this.el.layoutToggle.textContent = isWide ? 'Narrow' : 'Wide';
-        this.el.layoutToggle.title = isWide ? 'Switch to narrow layout' : 'Switch to wide layout';
+        this.el.layoutToggle.innerHTML = iconMarkup(isWide ? 'layoutWide' : 'layoutNarrow');
+        this.el.layoutToggle.title = isWide ? 'Wide layout' : 'Narrow layout';
+        this.el.layoutToggle.setAttribute('aria-label', isWide ? 'Wide layout' : 'Narrow layout');
       }
     },
     setHoldingsPrivacy: function (hidden) {
       if (!this.el.holdingsPrivacyToggle) return;
-      this.el.holdingsPrivacyToggle.textContent = hidden ? 'Show Holdings' : 'Hide Holdings';
+      this.el.holdingsPrivacyToggle.innerHTML = iconMarkup(hidden ? 'eyeOff' : 'eye');
       this.el.holdingsPrivacyToggle.title = hidden ? 'Show quantities and values' : 'Hide quantities and dollar values';
+      this.el.holdingsPrivacyToggle.setAttribute('aria-label', hidden ? 'Show holdings' : 'Hide holdings');
     },
     setStocksAutoRefreshToggle: function (enabled, mode) {
       if (!this.el.stocksAutoRefreshToggle) return;
@@ -187,8 +224,7 @@
     },
     setCryptoParticlesToggle: function (enabled, mode) {
       if (!this.el.cryptoParticlesToggle) return;
-      var isCrypto = mode === 'crypto';
-      this.el.cryptoParticlesToggle.classList.toggle('hidden', !isCrypto);
+      this.el.cryptoParticlesToggle.classList.toggle('hidden', false);
       this.el.cryptoParticlesToggle.innerHTML = enabled
         ? '<span aria-hidden="true">●</span> Particles On'
         : '<span aria-hidden="true">○</span> Particles Off';
@@ -196,10 +232,10 @@
       this.el.cryptoParticlesToggle.classList.toggle('btn--ghost', !enabled);
       this.el.cryptoParticlesToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
       this.el.cryptoParticlesToggle.title = enabled
-        ? 'Crypto particles are enabled'
-        : 'Crypto particles are disabled';
+        ? ('Background particles are enabled for ' + mode)
+        : ('Background particles are disabled for ' + mode);
       if (this.el.cryptoParticlesCanvas) {
-        this.el.cryptoParticlesCanvas.classList.toggle('hidden', !isCrypto || !enabled);
+        this.el.cryptoParticlesCanvas.classList.toggle('hidden', !enabled);
       }
     },
     setTwelveDataToggle: function (enabled) {
@@ -226,14 +262,13 @@
     },
     setApiDebugToggle: function (enabled) {
       if (!this.el.apiDebugToggle) return;
-      this.el.apiDebugToggle.innerHTML = enabled
-        ? '<span aria-hidden="true">●</span> API Debug On'
-        : '<span aria-hidden="true">○</span> API Debug Off';
+      this.el.apiDebugToggle.innerHTML = iconMarkup('bug');
       this.el.apiDebugToggle.classList.toggle('btn--primary', !!enabled);
       this.el.apiDebugToggle.classList.toggle('btn--ghost', !enabled);
       this.el.apiDebugToggle.title = enabled
         ? 'API debug panel is visible'
         : 'Show API debug panel';
+      this.el.apiDebugToggle.setAttribute('aria-label', enabled ? 'API debug on' : 'API debug off');
       this.el.apiDebugToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     },
     setApiDebugPanelVisible: function (enabled) {
@@ -368,13 +403,13 @@
       this.el.totalValue.textContent = hideHoldings ? 'Hidden' : fmtCurrency(totals.value);
       var pct = totals.cost ? (totals.pl / totals.cost) * 100 : 0;
       this.el.totalPL.textContent = hideHoldings ? pctText(pct) : (fmtCurrency(totals.pl) + ' (' + pctText(pct) + ')');
-      this.el.totalPL.className = pctClass(pct);
+      this.el.totalPL.className = 'stat-pill__value ' + pctClass(pct);
       if (this.el.totalDailyPL) {
         var dailyPct = totals.dailyPrev ? (totals.dailyPl / totals.dailyPrev) * 100 : 0;
         this.el.totalDailyPL.textContent = hideHoldings
           ? pctText(dailyPct)
           : (fmtCurrency(totals.dailyPl) + ' (' + pctText(dailyPct) + ')');
-        this.el.totalDailyPL.className = pctClass(dailyPct);
+        this.el.totalDailyPL.className = 'stat-pill__value ' + pctClass(dailyPct);
       }
     },
     renderAllocationLegend: function (items, colors, hideHoldings) {
@@ -609,7 +644,7 @@
     renderIndicatorsPanel: function (config) {
       if (!this.el.indicatorsTimeframes || !this.el.indicatorsMeta || !this.el.indicatorsOverallPill) return;
       var mode = config && config.mode === 'crypto' ? 'crypto' : 'stocks';
-      var assetLabel = (config && config.assetLabel) || (mode === 'crypto' ? 'BTC/USD' : 'TSLA');
+      var assetLabel = (config && config.assetLabel) || (mode === 'crypto' ? 'No crypto selected' : 'No stock selected');
       var overall = (config && config.overallStatus) || 'Neutral';
       var metaText = (config && config.metaText) || 'Refresh Prices to load indicator snapshots.';
       var timeframes = (config && config.timeframes) || {};

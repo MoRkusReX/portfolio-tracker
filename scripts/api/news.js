@@ -9,6 +9,15 @@
     return base + '/api/generic?url=' + encodeURIComponent(url);
   }
 
+  function apiBase() {
+    var cfg = window.PT_CONFIG || {};
+    if (Object.prototype.hasOwnProperty.call(cfg, 'proxyBase')) {
+      return String(cfg.proxyBase || '').replace(/\/$/, '');
+    }
+    if (location.protocol === 'file:') return 'http://localhost:5500';
+    return String(location.origin || '').replace(/\/$/, '');
+  }
+
   function fetchText(url, debugLabel) {
     return fetch(proxifyUrl(url), { cache: 'no-store', __ptDebugLabel: debugLabel || '' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -181,6 +190,49 @@
   }
 
   PT.NewsAPI = {
+    getCachedSnapshot: function (key) {
+      var safeKey = String(key || '').trim();
+      if (!safeKey) return Promise.resolve(null);
+      return fetch(apiBase() + '/api/news-cache?key=' + encodeURIComponent(safeKey), {
+        cache: 'no-store',
+        __ptDebugLabel: 'NewsAPI.getCachedSnapshot'
+      }).then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+      }).then(function (payload) {
+        if (!payload || !Array.isArray(payload.items) || !payload.items.length) return null;
+        return {
+          items: payload.items,
+          updatedAt: Math.max(0, Number(payload.updatedAt || 0) || 0),
+          fetchedAt: Math.max(0, Number(payload.fetchedAt || 0) || 0),
+          source: payload.source || null
+        };
+      }).catch(function () {
+        return null;
+      });
+    },
+    saveCachedSnapshot: function (key, items, meta) {
+      var safeKey = String(key || '').trim();
+      var safeItems = Array.isArray(items) ? items : null;
+      if (!safeKey || !safeItems) return Promise.resolve(null);
+      var body = {
+        key: safeKey,
+        items: safeItems,
+        fetchedAt: Math.max(0, Number(meta && meta.fetchedAt || 0) || Date.now()),
+        source: meta && meta.source ? String(meta.source) : null
+      };
+      return fetch(apiBase() + '/api/news-cache', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        __ptDebugLabel: 'NewsAPI.saveCachedSnapshot'
+      }).then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+      }).catch(function () {
+        return null;
+      });
+    },
     getGeneralStocksNews: function (options) {
       var sourcePref = String(options && options.source || 'auto').toLowerCase();
       var enabledOrdered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')

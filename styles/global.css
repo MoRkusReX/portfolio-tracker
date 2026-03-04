@@ -410,4 +410,9 @@ html[data-layout="wide"] .portfolio-grid {
     flex: 1;
     text-align: center;
   }
+
+  .topbar__actions .btn--icon,
+  .topbar__actions .file-btn.btn--icon {
+    flex: 0 0 auto;
+  }
 }

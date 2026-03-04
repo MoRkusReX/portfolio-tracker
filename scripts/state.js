@@ -83,7 +83,7 @@
     {
       id: 'indicators',
       label: 'Indicators',
-      note: 'TSLA and BTC/USD indicator candles and signal calculations',
+      note: 'Indicator candles and signal calculations for stocks and crypto assets',
       sources: [
         { id: 'twelvedata', label: 'Twelve Data', assetTypes: ['stock', 'crypto'], enabled: true, requiresKey: true }
       ]

@@ -21,25 +21,29 @@
   var INDICATOR_IN_FLIGHT = {};
   var PORTFOLIO_REMOTE_REV = 0;
   var PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = false;
+  var INDICATOR_EXPLORER = {
+    mode: 'stocks',
+    query: '',
+    results: [],
+    selected: null,
+    panel: null,
+    requestId: 0,
+    chartRequestId: 0,
+    chart: {
+      title: 'Price Chart',
+      meta: 'Search for an asset to load its chart.',
+      labels: [],
+      values: [],
+      label: ''
+    },
+    sessions: {
+      stocks: null,
+      crypto: null
+    }
+  };
   var AUTO_COLORS = ['#2cb6ff', '#14f1b2', '#f59e0b', '#fb7185', '#8b5cf6', '#22c55e', '#f97316', '#38bdf8', '#eab308', '#a78bfa'];
   var DEMO_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'AVGO', 'TSLA'];
   var DEMO_CRYPTO_IDS = ['bitcoin', 'ethereum', 'tether', 'ripple', 'binancecoin', 'solana', 'usd-coin', 'dogecoin', 'cardano', 'tron'];
-  var INDICATOR_TARGETS = {
-    stocks: {
-      mode: 'stocks',
-      assetType: 'stock',
-      cacheKey: 'stocks',
-      label: 'TSLA',
-      symbol: 'TSLA'
-    },
-    crypto: {
-      mode: 'crypto',
-      assetType: 'crypto',
-      cacheKey: 'crypto',
-      label: 'BTC/USD',
-      symbol: 'BTC/USD'
-    }
-  };
   var INDICATOR_TIMEFRAMES = {
     '1d': { label: '1D', interval: '1day', warmup: 300, incremental: 12, maxCandles: 360, bucket: 'day' },
     '1w': { label: '1W', interval: '1week', warmup: 260, incremental: 8, maxCandles: 300, bucket: 'week' },
@@ -60,6 +64,15 @@
 
   function assetKey(asset) {
     return asset.type + ':' + asset.id;
+  }
+
+  function escapeHtml(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function setStatus(text) {
@@ -213,8 +226,74 @@
     return 'indicators:computed:' + modeKey + ':' + timeframeKey;
   }
 
+  function indicatorTargetKey(target) {
+    if (!target || !target.symbol) return '';
+    return (target.assetType === 'crypto' ? 'crypto' : 'stock') + ':' + String(target.symbol).toUpperCase().replace(/[^A-Z0-9/_:.+-]+/g, '_');
+  }
+
+  function indicatorTargetFromAsset(asset) {
+    if (!asset) return null;
+    if (asset.type === 'crypto') {
+      var cryptoSymbol = String(asset.symbol || '').trim().toUpperCase();
+      if (!cryptoSymbol) return null;
+      return {
+        mode: 'crypto',
+        assetType: 'crypto',
+        symbol: cryptoSymbol + '/USD',
+        label: cryptoSymbol + '/USD',
+        cacheKey: indicatorTargetKey({ assetType: 'crypto', symbol: cryptoSymbol + '/USD' }),
+        owned: true,
+        assetId: asset.id
+      };
+    }
+    var stockSymbol = String(asset.yahooSymbol || asset.symbol || '').trim().toUpperCase();
+    if (!stockSymbol) return null;
+    return {
+      mode: 'stocks',
+      assetType: 'stock',
+      symbol: stockSymbol,
+      label: stockSymbol,
+      cacheKey: indicatorTargetKey({ assetType: 'stock', symbol: stockSymbol }),
+      owned: true,
+      assetId: asset.id
+    };
+  }
+
+  function indicatorTargetFromExplorerItem(item, modeKey) {
+    if (!item) return null;
+    if (modeKey === 'crypto') {
+      var cryptoSymbol = String(item.symbol || '').trim().toUpperCase();
+      if (!cryptoSymbol) return null;
+      return {
+        mode: 'crypto',
+        assetType: 'crypto',
+        symbol: cryptoSymbol + '/USD',
+        label: (item.name ? (item.name + ' (' + cryptoSymbol + '/USD)') : (cryptoSymbol + '/USD')),
+        cacheKey: indicatorTargetKey({ assetType: 'crypto', symbol: cryptoSymbol + '/USD' }),
+        owned: false,
+        sourceId: item.id || cryptoSymbol,
+        coinId: item.id || null,
+        baseSymbol: cryptoSymbol
+      };
+    }
+    var stockSymbol = String(item.yahooSymbol || item.symbol || '').trim().toUpperCase();
+    if (!stockSymbol) return null;
+    return {
+      mode: 'stocks',
+      assetType: 'stock',
+      symbol: stockSymbol,
+      label: item.name ? (item.name + ' (' + stockSymbol + ')') : stockSymbol,
+      cacheKey: indicatorTargetKey({ assetType: 'stock', symbol: stockSymbol }),
+      owned: false,
+      sourceId: item.yahooSymbol || item.symbol || stockSymbol,
+      yahooSymbol: item.yahooSymbol || stockSymbol,
+      stooqSymbol: item.stooq || null,
+      market: item.market || 'US'
+    };
+  }
+
   function indicatorModeConfig(mode) {
-    return INDICATOR_TARGETS[mode === 'crypto' ? 'crypto' : 'stocks'];
+    return indicatorTargetFromAsset(getSelectedAsset(mode === 'crypto' ? 'crypto' : 'stocks'));
   }
 
   function indicatorSourceEnabled(assetType) {
@@ -282,26 +361,47 @@
     if (opts.lastFetchedAt) {
       return 'Twelve Data • Updated ' + new Date(opts.lastFetchedAt).toLocaleString();
     }
+    if (opts.assetLabel) {
+      return 'Refresh Prices to load ' + opts.assetLabel + ' indicator snapshots.';
+    }
     return modeKey === 'crypto'
-      ? 'Refresh Prices to load BTC/USD indicator snapshots.'
-      : 'Refresh Prices to load TSLA indicator snapshots.';
+      ? 'Select a crypto holding or use Explore to load indicator snapshots.'
+      : 'Select a stock holding or use Explore to load indicator snapshots.';
   }
 
-  function rebuildIndicatorPanelState(modeKey, metaOptions) {
-    var config = indicatorModeConfig(modeKey);
+  function rebuildIndicatorPanelState(modeKey, target, metaOptions, persistSlot) {
+    var config = target || indicatorModeConfig(modeKey);
+    if (!config) {
+      var emptyState = {
+        mode: modeKey === 'crypto' ? 'crypto' : 'stocks',
+        assetLabel: modeKey === 'crypto' ? 'No crypto selected' : 'No stock selected',
+        overallStatus: 'Neutral',
+        weightedScore: 0,
+        timeframes: {},
+        targetKey: '',
+        metaText: buildIndicatorPanelMeta(modeKey, {
+          error: metaOptions && metaOptions.error,
+          usedCache: true,
+          assetLabel: modeKey === 'crypto' ? 'a crypto asset' : 'a stock'
+        })
+      };
+      if (persistSlot !== false) state.indicators[emptyState.mode] = emptyState;
+      return emptyState;
+    }
     var timeframes = {};
     var usedCache = false;
     var lastFetchedAt = 0;
+    var targetKey = config.cacheKey || indicatorTargetKey(config);
     ['1d', '1w', '1m'].forEach(function (timeframeKey) {
-      var candlePayload = getCachedAny(indicatorCandleCacheKey(config.cacheKey, timeframeKey));
-      var computedPayload = getCachedAny(indicatorComputedCacheKey(config.cacheKey, timeframeKey));
+      var candlePayload = getCachedAny(indicatorCandleCacheKey(targetKey, timeframeKey));
+      var computedPayload = getCachedAny(indicatorComputedCacheKey(targetKey, timeframeKey));
       if (!candlePayload || !Array.isArray(candlePayload.candles) || !candlePayload.candles.length) return;
       usedCache = true;
       lastFetchedAt = Math.max(lastFetchedAt, Number(candlePayload.lastFetchedAt || 0) || 0);
       if (!computedPayload || computedPayload.latestCandleTime !== candlePayload.latestCandleTime) {
         try {
           computedPayload = computeIndicatorSnapshot(candlePayload.candles, timeframeKey);
-          storage.setCached(state.caches, indicatorComputedCacheKey(config.cacheKey, timeframeKey), computedPayload);
+          storage.setCached(state.caches, indicatorComputedCacheKey(targetKey, timeframeKey), computedPayload);
           storage.saveCache(state.caches);
         } catch (err) {
           computedPayload = null;
@@ -312,25 +412,28 @@
     var summary = window.PT && window.PT.IndicatorEngine && typeof window.PT.IndicatorEngine.summarizeByTimeframe === 'function'
       ? window.PT.IndicatorEngine.summarizeByTimeframe(timeframes)
       : { overall: 'Neutral', weightedScore: 0 };
-    state.indicators[config.cacheKey] = {
+    var nextState = {
       mode: config.mode,
       assetLabel: config.label,
       overallStatus: summary.overall || 'Neutral',
       weightedScore: summary.weightedScore || 0,
+      targetKey: targetKey,
       timeframes: timeframes,
-      metaText: buildIndicatorPanelMeta(config.cacheKey, {
+      metaText: buildIndicatorPanelMeta(config.mode, {
         disabled: metaOptions && metaOptions.disabled,
         error: metaOptions && metaOptions.error,
         usedCache: metaOptions && Object.prototype.hasOwnProperty.call(metaOptions, 'usedCache') ? metaOptions.usedCache : usedCache,
-        lastFetchedAt: metaOptions && Object.prototype.hasOwnProperty.call(metaOptions, 'lastFetchedAt') ? metaOptions.lastFetchedAt : lastFetchedAt
+        lastFetchedAt: metaOptions && Object.prototype.hasOwnProperty.call(metaOptions, 'lastFetchedAt') ? metaOptions.lastFetchedAt : lastFetchedAt,
+        assetLabel: config.label
       })
     };
-    return state.indicators[config.cacheKey];
+    if (persistSlot !== false) state.indicators[config.mode] = nextState;
+    return nextState;
   }
 
   function hydrateIndicatorsFromCache() {
-    rebuildIndicatorPanelState('stocks', {});
-    rebuildIndicatorPanelState('crypto', {});
+    rebuildIndicatorPanelState('stocks', indicatorModeConfig('stocks'), {});
+    rebuildIndicatorPanelState('crypto', indicatorModeConfig('crypto'), {});
   }
 
   function isIndicatorTimeframeFresh(timeframeKey, payload) {
@@ -339,13 +442,14 @@
     return indicatorBucketKey(tf.bucket, payload.lastFetchedAt) === indicatorBucketKey(tf.bucket, Date.now());
   }
 
-  function updateIndicatorTimeframe(modeKey, timeframeKey) {
-    var config = indicatorModeConfig(modeKey);
+  function updateIndicatorTimeframe(modeKey, timeframeKey, target) {
+    var config = target || indicatorModeConfig(modeKey);
     var timeframe = INDICATOR_TIMEFRAMES[timeframeKey];
     if (!config || !timeframe) return Promise.resolve(null);
-    var inflightKey = config.cacheKey + ':' + timeframeKey;
-    var candleKey = indicatorCandleCacheKey(config.cacheKey, timeframeKey);
-    var computedKey = indicatorComputedCacheKey(config.cacheKey, timeframeKey);
+    var targetKey = config.cacheKey || indicatorTargetKey(config);
+    var inflightKey = targetKey + ':' + timeframeKey;
+    var candleKey = indicatorCandleCacheKey(targetKey, timeframeKey);
+    var computedKey = indicatorComputedCacheKey(targetKey, timeframeKey);
     var existing = getCachedAny(candleKey);
 
     if (existing && Array.isArray(existing.candles) && existing.candles.length && isIndicatorTimeframeFresh(timeframeKey, existing)) {
@@ -398,16 +502,22 @@
     return INDICATOR_IN_FLIGHT[inflightKey];
   }
 
-  function refreshIndicatorsForMode(modeKey) {
-    var config = indicatorModeConfig(modeKey);
-    if (!config) return Promise.resolve({ ok: false, error: 'Indicators unavailable' });
+  function refreshIndicatorsForMode(modeKey, target, persistSlot) {
+    var config = target || indicatorModeConfig(modeKey);
+    if (!config) {
+      return Promise.resolve({
+        ok: false,
+        empty: true,
+        state: rebuildIndicatorPanelState(modeKey, null, {}, persistSlot)
+      });
+    }
     if (!indicatorSourceEnabled(config.assetType)) {
-      var disabledState = rebuildIndicatorPanelState(config.cacheKey, { disabled: true, usedCache: true });
+      var disabledState = rebuildIndicatorPanelState(modeKey, config, { disabled: true, usedCache: true }, persistSlot);
       return Promise.resolve({ ok: false, disabled: true, state: disabledState });
     }
     var keys = Object.keys(INDICATOR_TIMEFRAMES);
     return Promise.allSettled(keys.map(function (timeframeKey) {
-      return updateIndicatorTimeframe(config.cacheKey, timeframeKey);
+      return updateIndicatorTimeframe(modeKey, timeframeKey, config);
     })).then(function (results) {
       var anyFresh = false;
       var anyCache = false;
@@ -424,26 +534,28 @@
           errorText = (result.reason && result.reason.message) || 'Indicator request failed';
         }
       });
-      rebuildIndicatorPanelState(config.cacheKey, {
+      var nextState = rebuildIndicatorPanelState(modeKey, config, {
         error: errorText,
         usedCache: !anyFresh || anyCache,
         lastFetchedAt: lastFetchedAt
-      });
+      }, persistSlot);
       return {
         ok: !errorText,
         partial: !!errorText,
         usedCache: !anyFresh || anyCache,
-        error: errorText
+        error: errorText,
+        state: nextState
       };
     }).catch(function (err) {
-      rebuildIndicatorPanelState(config.cacheKey, {
+      var failState = rebuildIndicatorPanelState(modeKey, config, {
         error: (err && err.message) || 'Indicator refresh failed',
         usedCache: true
-      });
+      }, persistSlot);
       return {
         ok: false,
         error: (err && err.message) || 'Indicator refresh failed',
-        usedCache: true
+        usedCache: true,
+        state: failState
       };
     });
   }
@@ -717,15 +829,23 @@
     return !!storage.getCached(state.caches, newsCacheKeyForAsset(asset), maxAgeMs || 0);
   }
 
-  function getStockPrevCloseHint(asset) {
-    if (!asset || asset.type !== 'stock') return null;
-    var quote = state.market.stocks[asset.id] || getCachedAny(stockQuoteCacheKey(asset));
-    var prev = quote && isFinite(Number(quote.regularMarketPreviousClose)) ? Number(quote.regularMarketPreviousClose)
-      : (quote && isFinite(Number(quote.previous_close)) ? Number(quote.previous_close) : null);
-    if (prev && prev > 0) return prev;
+  function hydrateAssetNewsFromCache(asset, maxAgeMs) {
+    if (!asset) return null;
+    var scopedKey = newsCacheKeyForAsset(asset);
+    var legacyKey = 'news:' + asset.type + ':' + (asset.coinId || asset.symbol);
+    var cached = storage.getCached(state.caches, scopedKey, maxAgeMs || 0) ||
+      storage.getCached(state.caches, legacyKey, maxAgeMs || 0) ||
+      getCachedAny(scopedKey) ||
+      getCachedAny(legacyKey);
+    if (Array.isArray(cached) && cached.length) {
+      state.news[assetKey(asset)] = cached;
+      return cached;
+    }
+    return null;
+  }
 
-    var hist = state.history.stocks[asset.id] || getCachedAny('hist:stock:' + (asset.stooqSymbol || asset.symbol));
-    if (!Array.isArray(hist) || hist.length < 2) return null;
+  function inferPrevCloseFromHistory(hist, quoteDate) {
+    if (!Array.isArray(hist) || hist.length < 1) return null;
     var rows = hist.map(function (row) {
       return {
         t: String(row && row.t || ''),
@@ -736,8 +856,26 @@
     }).sort(function (a, b) {
       return a.t.localeCompare(b.t);
     });
-    if (rows.length < 2) return null;
-    return Number(rows[rows.length - 2].c);
+    if (!rows.length) return null;
+    var latest = rows[rows.length - 1];
+    var safeQuoteDate = String(quoteDate || '').trim();
+    if (safeQuoteDate && latest.t === safeQuoteDate && rows.length >= 2) {
+      return Number(rows[rows.length - 2].c);
+    }
+    return Number(latest.c);
+  }
+
+  function getStockPrevCloseHint(asset) {
+    if (!asset || asset.type !== 'stock') return null;
+    var quote = state.market.stocks[asset.id] || getCachedAny(stockQuoteCacheKey(asset));
+    var hist = state.history.stocks[asset.id] || getCachedAny('hist:stock:' + (asset.stooqSymbol || asset.symbol));
+    var inferred = inferPrevCloseFromHistory(hist, quote && quote.date);
+    if (inferred && inferred > 0) return inferred;
+
+    var prev = quote && isFinite(Number(quote.regularMarketPreviousClose)) ? Number(quote.regularMarketPreviousClose)
+      : (quote && isFinite(Number(quote.previous_close)) ? Number(quote.previous_close) : null);
+    if (prev && prev > 0) return prev;
+    return null;
   }
 
   function normalizeCachedStockQuote(asset, quote, hist) {
@@ -748,60 +886,36 @@
     var prevClose = isFinite(Number(out.regularMarketPreviousClose)) ? Number(out.regularMarketPreviousClose)
       : (isFinite(Number(out.previous_close)) ? Number(out.previous_close) : null);
 
-    if (!(prevClose > 0) && Array.isArray(hist) && hist.length >= 2) {
-      var rows = hist
-        .map(function (row) {
-          return {
-            t: String(row && row.t || ''),
-            c: isFinite(Number(row && row.c)) ? Number(row.c) : null
-          };
-        })
-        .filter(function (row) {
-          return row.t && row.c !== null;
-        })
-        .sort(function (a, b) {
-          return a.t.localeCompare(b.t);
-        });
-      if (rows.length >= 2) {
-        prevClose = Number(rows[rows.length - 2].c);
-      }
+    if (!(prevClose > 0)) {
+      prevClose = inferPrevCloseFromHistory(hist, out.date);
     }
 
     if (!(prevClose > 0) || !(price !== null)) return out;
 
     var changed = false;
-    if (!isFinite(Number(out.previous_close))) {
-      out.previous_close = prevClose;
-      changed = true;
-    }
-    if (!isFinite(Number(out.regularMarketPreviousClose))) {
-      out.regularMarketPreviousClose = prevClose;
-      changed = true;
-    }
+    var safePrev = Number(prevClose);
+    var dayChange = price - safePrev;
+    var dayPct = safePrev !== 0 ? (dayChange / safePrev) * 100 : null;
 
-    var dayChange = isFinite(Number(out.change)) ? Number(out.change) : null;
-    if (dayChange === null) {
-      dayChange = price - prevClose;
+    if (Number(out.previous_close) !== safePrev) {
+      out.previous_close = safePrev;
+      changed = true;
+    }
+    if (Number(out.regularMarketPreviousClose) !== safePrev) {
+      out.regularMarketPreviousClose = safePrev;
+      changed = true;
+    }
+    if (!isFinite(Number(out.change)) || Math.abs(Number(out.change) - dayChange) > 0.000001) {
       out.change = dayChange;
       changed = true;
     }
-
-    var dayPct = isFinite(Number(out.changePercent)) ? Number(out.changePercent)
-      : (isFinite(Number(out.percent_change)) ? Number(out.percent_change) : null);
-    if (dayPct === null && prevClose !== 0) {
-      dayPct = (dayChange / prevClose) * 100;
+    if (dayPct !== null && (!isFinite(Number(out.changePercent)) || Math.abs(Number(out.changePercent) - dayPct) > 0.000001)) {
       out.changePercent = dayPct;
+      changed = true;
+    }
+    if (dayPct !== null && (!isFinite(Number(out.percent_change)) || Math.abs(Number(out.percent_change) - dayPct) > 0.000001)) {
       out.percent_change = dayPct;
       changed = true;
-    } else {
-      if (!isFinite(Number(out.changePercent)) && dayPct !== null) {
-        out.changePercent = dayPct;
-        changed = true;
-      }
-      if (!isFinite(Number(out.percent_change)) && dayPct !== null) {
-        out.percent_change = dayPct;
-        changed = true;
-      }
     }
 
     if (changed) {
@@ -834,7 +948,7 @@
         }
       }
 
-      var news = getCachedAny(newsKey);
+      var news = getCachedAny(newsCacheKeyForAsset(asset)) || getCachedAny(newsKey);
       if (news) state.news[assetKey(asset)] = news;
 
       var events = getCachedAny(eventsKey);
@@ -944,6 +1058,9 @@
       dayChangePct = Number(quote.percent_change);
     } else if (asset.type === 'crypto' && quote && isFinite(Number(quote.change24h))) {
       dayChangePct = Number(quote.change24h);
+    } else if (quote && isFinite(Number(quote.change)) && price !== null) {
+      var derivedPrev = price - Number(quote.change);
+      if (derivedPrev !== 0) dayChangePct = (Number(quote.change) / derivedPrev) * 100;
     } else if (quote && isFinite(Number(quote.regularMarketPreviousClose)) && price !== null && Number(quote.regularMarketPreviousClose) !== 0) {
       dayChangePct = ((price - Number(quote.regularMarketPreviousClose)) / Number(quote.regularMarketPreviousClose)) * 100;
     } else if (quote && isFinite(Number(quote.previous_close)) && price !== null && Number(quote.previous_close) !== 0) {
@@ -1046,6 +1163,77 @@
     return Object.assign({}, asset, c);
   }
 
+  function renderIndicatorSnapshot(targetEls, config, modeLabelText) {
+    if (!targetEls || !targetEls.assetLabel || !targetEls.overallPill || !targetEls.meta || !targetEls.timeframes) return;
+    var mode = config && config.mode === 'crypto' ? 'crypto' : 'stocks';
+    var assetLabel = (config && config.assetLabel) || (mode === 'crypto' ? 'No crypto selected' : 'No stock selected');
+    var overall = (config && config.overallStatus) || 'Neutral';
+    var metaText = (config && config.metaText) || 'No indicator snapshot yet.';
+    var timeframes = (config && config.timeframes) || {};
+    var hasRows = false;
+
+    function pillClass(status) {
+      var normalized = String(status || 'Neutral').toLowerCase();
+      if (normalized === 'bullish') return 'indicator-pill indicator-pill--bullish';
+      if (normalized === 'bearish') return 'indicator-pill indicator-pill--bearish';
+      return 'indicator-pill indicator-pill--neutral';
+    }
+
+    function fmtIndicator(value) {
+      var numValue = Number(value);
+      if (!isFinite(numValue)) return 'n/a';
+      var abs = Math.abs(numValue);
+      var digits = abs >= 1000 ? 2 : (abs >= 100 ? 2 : (abs >= 1 ? 3 : 4));
+      return numValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits });
+    }
+
+    function row(label, primary, secondary, status) {
+      return '<div class="indicator-row">' +
+        '<div class="indicator-row__label">' + escapeHtml(label) + '</div>' +
+        '<div class="indicator-row__value"><strong>' + escapeHtml(primary) + '</strong>' + (secondary ? '<small>' + escapeHtml(secondary) + '</small>' : '') + '</div>' +
+        '<span class="' + pillClass(status) + '">' + escapeHtml(status || 'Neutral') + '</span>' +
+      '</div>';
+    }
+
+    targetEls.assetLabel.textContent = assetLabel;
+    if (targetEls.modeLabel) targetEls.modeLabel.textContent = modeLabelText || (mode === 'crypto' ? 'Crypto' : 'Stocks');
+    targetEls.meta.textContent = metaText;
+    targetEls.overallPill.className = pillClass(overall);
+    targetEls.overallPill.textContent = overall;
+
+    targetEls.timeframes.innerHTML = ['1d', '1w', '1m'].map(function (key) {
+      var tf = timeframes[key];
+      if (!tf) return '';
+      hasRows = true;
+      var values = tf.values || {};
+      var statuses = tf.statuses || {};
+      return '<section class="indicator-card">' +
+        '<div class="indicator-card__head"><h4>' + escapeHtml(String(key).toUpperCase()) + '</h4><span class="' + pillClass(tf.overall) + '">' + escapeHtml(tf.overall || 'Neutral') + '</span></div>' +
+        '<div class="indicator-card__rows">' +
+          row('EMA Trend', 'EMA20 ' + fmtIndicator(values.ema20) + ' | EMA50 ' + fmtIndicator(values.ema50), 'Close ' + fmtIndicator(tf.close), statuses.ema) +
+          row('RSI 14', fmtIndicator(values.rsi14), 'Wilder smoothing', statuses.rsi) +
+          row('MACD', 'Line ' + fmtIndicator(values.macdLine) + ' | Signal ' + fmtIndicator(values.macdSignal), 'Hist ' + fmtIndicator(values.macdHistogram), statuses.macd) +
+          row('Bollinger', 'Mid ' + fmtIndicator(values.bbMiddle) + ' | Up ' + fmtIndicator(values.bbUpper), 'Low ' + fmtIndicator(values.bbLower) + ' | ' + String(values.bollingerPosition || 'n/a'), statuses.bollinger) +
+        '</div>' +
+        '<div class="indicator-note">Score: ' + escapeHtml(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
+      '</section>';
+    }).join('');
+
+    if (!hasRows) {
+      targetEls.timeframes.innerHTML = '<section class="indicator-card"><div class="muted">No indicator snapshot yet.</div></section>';
+    }
+  }
+
+  function indicatorPanelStateForMode(mode) {
+    var target = indicatorModeConfig(mode);
+    var slotKey = mode === 'crypto' ? 'crypto' : 'stocks';
+    var targetKey = target ? (target.cacheKey || indicatorTargetKey(target)) : '';
+    if (!state.indicators[slotKey] || state.indicators[slotKey].targetKey !== targetKey) {
+      rebuildIndicatorPanelState(mode, target, {});
+    }
+    return state.indicators[slotKey];
+  }
+
   function renderAll() {
     ui.setTheme(state.app.theme);
     ui.setLayoutMode(state.app.layoutMode);
@@ -1069,18 +1257,302 @@
     ui.renderTotals(getModeTotals(items), !!state.app.hideHoldings);
     renderAllocation(items);
     renderDetails();
-    ui.renderIndicatorsPanel(state.indicators[state.app.mode === 'crypto' ? 'crypto' : 'stocks'] || {
+    ui.renderIndicatorsPanel(indicatorPanelStateForMode(state.app.mode) || {
       mode: state.app.mode,
-      assetLabel: state.app.mode === 'crypto' ? 'BTC/USD' : 'TSLA',
+      assetLabel: state.app.mode === 'crypto' ? 'No crypto selected' : 'No stock selected',
       overallStatus: 'Neutral',
-      metaText: state.app.mode === 'crypto'
-        ? 'Refresh Prices to load BTC/USD indicator snapshots.'
-        : 'Refresh Prices to load TSLA indicator snapshots.',
+      metaText: buildIndicatorPanelMeta(state.app.mode, {}),
       timeframes: {}
     });
     renderBtcDominancePanel();
     syncCryptoParticles();
     persist();
+  }
+
+  function hideIndicatorExplorerSearchResults() {
+    if (!ui.el.indicatorExplorerSearchList) return;
+    ui.el.indicatorExplorerSearchList.classList.add('hidden');
+    ui.el.indicatorExplorerSearchList.innerHTML = '';
+  }
+
+  function emptyIndicatorExplorerChart() {
+    return {
+      title: 'Price Chart',
+      meta: 'Search for an asset to load its chart.',
+      labels: [],
+      values: [],
+      label: ''
+    };
+  }
+
+  function saveIndicatorExplorerSession(modeKey) {
+    var normalizedMode = modeKey === 'crypto' ? 'crypto' : 'stocks';
+    INDICATOR_EXPLORER.sessions[normalizedMode] = {
+      selected: INDICATOR_EXPLORER.selected ? Object.assign({}, INDICATOR_EXPLORER.selected) : null,
+      panel: INDICATOR_EXPLORER.panel ? JSON.parse(JSON.stringify(INDICATOR_EXPLORER.panel)) : null,
+      chart: INDICATOR_EXPLORER.chart ? JSON.parse(JSON.stringify(INDICATOR_EXPLORER.chart)) : emptyIndicatorExplorerChart()
+    };
+  }
+
+  function loadIndicatorExplorerSession(modeKey) {
+    var normalizedMode = modeKey === 'crypto' ? 'crypto' : 'stocks';
+    var session = INDICATOR_EXPLORER.sessions[normalizedMode];
+    INDICATOR_EXPLORER.mode = normalizedMode;
+    INDICATOR_EXPLORER.query = '';
+    INDICATOR_EXPLORER.results = [];
+    INDICATOR_EXPLORER.requestId += 1;
+    INDICATOR_EXPLORER.chartRequestId += 1;
+    INDICATOR_EXPLORER.selected = session && session.selected ? Object.assign({}, session.selected) : null;
+    INDICATOR_EXPLORER.panel = session && session.panel ? JSON.parse(JSON.stringify(session.panel)) : null;
+    INDICATOR_EXPLORER.chart = session && session.chart ? JSON.parse(JSON.stringify(session.chart)) : emptyIndicatorExplorerChart();
+    if (ui.el.indicatorExplorerSearchInput) {
+      ui.el.indicatorExplorerSearchInput.value = INDICATOR_EXPLORER.selected ? String(INDICATOR_EXPLORER.selected.label || '') : '';
+    }
+  }
+
+  function renderIndicatorExplorerSearchResults() {
+    var listEl = ui.el.indicatorExplorerSearchList;
+    if (!listEl) return;
+    if (!INDICATOR_EXPLORER.results.length) {
+      listEl.classList.add('hidden');
+      listEl.innerHTML = '';
+      return;
+    }
+    listEl.classList.remove('hidden');
+    listEl.innerHTML = INDICATOR_EXPLORER.results.map(function (item, idx) {
+      var sub = INDICATOR_EXPLORER.mode === 'crypto'
+        ? String(item.symbol || '').toUpperCase()
+        : String(item.symbol || item.yahooSymbol || '').toUpperCase();
+      var rawName = String(item.name || item.id || '').trim();
+      var normalizedName = rawName.toUpperCase();
+      var secondary = (rawName && normalizedName !== sub)
+        ? rawName
+        : (INDICATOR_EXPLORER.mode === 'stocks' ? String(item.market || item.stooq || '').trim() : '');
+      return '<button class="autocomplete__item" type="button" data-indicator-explorer-idx="' + idx + '">' +
+        '<strong>' + escapeHtml(sub) + '</strong>' +
+        (secondary ? ('<span>' + escapeHtml(secondary) + '</span>') : '') +
+      '</button>';
+    }).join('');
+  }
+
+  function renderIndicatorExplorer() {
+    if (!ui || !ui.el || !ui.el.indicatorExplorerModal) return;
+    var isCrypto = INDICATOR_EXPLORER.mode === 'crypto';
+    if (ui.el.indicatorExplorerStocksTab) {
+      ui.el.indicatorExplorerStocksTab.classList.toggle('is-active', !isCrypto);
+      ui.el.indicatorExplorerStocksTab.setAttribute('aria-selected', !isCrypto ? 'true' : 'false');
+    }
+    if (ui.el.indicatorExplorerCryptoTab) {
+      ui.el.indicatorExplorerCryptoTab.classList.toggle('is-active', isCrypto);
+      ui.el.indicatorExplorerCryptoTab.setAttribute('aria-selected', isCrypto ? 'true' : 'false');
+    }
+    if (ui.el.indicatorExplorerSearchInput) {
+      ui.el.indicatorExplorerSearchInput.placeholder = isCrypto ? 'Search SOL or Solana' : 'Search TSLA or Tesla';
+    }
+    var hasSelection = !!INDICATOR_EXPLORER.selected;
+    if (ui.el.indicatorExplorerChartTitle && ui.el.indicatorExplorerChartTitle.closest('.panel-block')) {
+      ui.el.indicatorExplorerChartTitle.closest('.panel-block').classList.toggle('hidden', !hasSelection);
+    }
+    if (ui.el.indicatorExplorerAssetLabel && ui.el.indicatorExplorerAssetLabel.closest('.panel-block')) {
+      ui.el.indicatorExplorerAssetLabel.closest('.panel-block').classList.toggle('hidden', !hasSelection);
+    }
+    if (ui.el.indicatorExplorerTimeframes) {
+      ui.el.indicatorExplorerTimeframes.classList.toggle('hidden', !hasSelection);
+    }
+    renderIndicatorExplorerChart();
+    if (hasSelection) {
+      renderIndicatorSnapshot({
+        assetLabel: ui.el.indicatorExplorerAssetLabel,
+        modeLabel: ui.el.indicatorExplorerModeLabel,
+        overallPill: ui.el.indicatorExplorerOverallPill,
+        meta: ui.el.indicatorExplorerMeta,
+        timeframes: ui.el.indicatorExplorerTimeframes
+      }, INDICATOR_EXPLORER.panel || {
+        mode: INDICATOR_EXPLORER.mode,
+        assetLabel: isCrypto ? 'No crypto selected' : 'No stock selected',
+        overallStatus: 'Neutral',
+        metaText: 'Search for an asset to load its indicator snapshots.',
+        timeframes: {}
+      }, isCrypto ? 'Crypto Explorer' : 'Stocks Explorer');
+    }
+    renderIndicatorExplorerSearchResults();
+  }
+
+  function setIndicatorExplorerMode(modeKey) {
+    saveIndicatorExplorerSession(INDICATOR_EXPLORER.mode);
+    loadIndicatorExplorerSession(modeKey);
+    hideIndicatorExplorerSearchResults();
+    renderIndicatorExplorer();
+  }
+
+  function openIndicatorExplorerModal() {
+    if (!ui.el.indicatorExplorerModal) return;
+    ui.el.indicatorExplorerModal.classList.remove('hidden');
+    ui.el.indicatorExplorerModal.setAttribute('aria-hidden', 'false');
+    loadIndicatorExplorerSession(INDICATOR_EXPLORER.mode);
+    renderIndicatorExplorer();
+    if (ui.el.indicatorExplorerSearchInput) ui.el.indicatorExplorerSearchInput.focus();
+  }
+
+  function closeIndicatorExplorerModal() {
+    if (!ui.el.indicatorExplorerModal) return;
+    saveIndicatorExplorerSession(INDICATOR_EXPLORER.mode);
+    ui.el.indicatorExplorerModal.classList.add('hidden');
+    ui.el.indicatorExplorerModal.setAttribute('aria-hidden', 'true');
+    hideIndicatorExplorerSearchResults();
+  }
+
+  function runIndicatorExplorerSearch() {
+    var inputEl = ui.el.indicatorExplorerSearchInput;
+    if (!inputEl) return;
+    var q = String(inputEl.value || '').trim();
+    INDICATOR_EXPLORER.query = q;
+    if (q.length < 1) {
+      INDICATOR_EXPLORER.results = [];
+      hideIndicatorExplorerSearchResults();
+      return;
+    }
+    var reqId = ++INDICATOR_EXPLORER.requestId;
+    var searchTask = INDICATOR_EXPLORER.mode === 'crypto'
+      ? (PT.CryptoAPI && typeof PT.CryptoAPI.searchAssets === 'function' ? PT.CryptoAPI.searchAssets(q) : Promise.resolve([]))
+      : (PT.StockAPI && typeof PT.StockAPI.searchSymbols === 'function' ? PT.StockAPI.searchSymbols(q) : Promise.resolve([]));
+    searchTask.then(function (items) {
+      if (reqId !== INDICATOR_EXPLORER.requestId) return;
+      INDICATOR_EXPLORER.results = (Array.isArray(items) ? items : []).slice(0, 8);
+      renderIndicatorExplorerSearchResults();
+    }).catch(function () {
+      if (reqId !== INDICATOR_EXPLORER.requestId) return;
+      INDICATOR_EXPLORER.results = [];
+      hideIndicatorExplorerSearchResults();
+    });
+  }
+
+  function renderIndicatorExplorerChart() {
+    if (!ui || !ui.el) return;
+    var chartState = INDICATOR_EXPLORER.chart || {};
+    if (ui.el.indicatorExplorerChartTitle) {
+      ui.el.indicatorExplorerChartTitle.textContent = chartState.title || 'Price Chart';
+    }
+    if (ui.el.indicatorExplorerChartMeta) {
+      ui.el.indicatorExplorerChartMeta.textContent = chartState.meta || '';
+    }
+    if (!chartMgr || typeof chartMgr.renderAssetLine !== 'function') return;
+    chartMgr.renderAssetLine(
+      ui.el.indicatorExplorerChart,
+      ui.el.indicatorExplorerChartFallback,
+      Array.isArray(chartState.labels) ? chartState.labels : [],
+      Array.isArray(chartState.values) ? chartState.values : [],
+      chartState.label || '',
+      'indicator-explorer'
+    );
+  }
+
+  function indicatorExplorerHistoryCacheKey(target) {
+    if (!target) return '';
+    var idPart = String(target.sourceId || target.symbol || '').trim().toUpperCase();
+    if (!idPart) return '';
+    return 'hist:explore:' + target.assetType + ':' + idPart;
+  }
+
+  function fetchIndicatorExplorerChart(target) {
+    if (!target) return Promise.resolve();
+    var reqId = ++INDICATOR_EXPLORER.chartRequestId;
+    INDICATOR_EXPLORER.chart = {
+      title: (target.label || target.symbol || 'Asset') + ' Chart',
+      meta: 'Loading chart...',
+      labels: [],
+      values: [],
+      label: ''
+    };
+    renderIndicatorExplorer();
+
+    var cacheKey = indicatorExplorerHistoryCacheKey(target);
+    var historyLoader;
+    if (target.assetType === 'crypto') {
+      var baseSymbol = String(target.baseSymbol || target.symbol || '').replace('/USD', '').trim().toUpperCase();
+      var cryptoAsset = {
+        type: 'crypto',
+        symbol: baseSymbol,
+        coinId: target.coinId || target.sourceId || baseSymbol.toLowerCase()
+      };
+      historyLoader = function () {
+        return PT.CryptoAPI.getOHLC(cryptoAsset, 180);
+      };
+    } else {
+      var stockAsset = {
+        type: 'stock',
+        symbol: String(target.symbol || '').replace(/\.[A-Z]+$/, '').trim().toUpperCase(),
+        yahooSymbol: String(target.yahooSymbol || target.sourceId || target.symbol || '').trim().toUpperCase(),
+        stooqSymbol: target.stooqSymbol || null,
+        market: target.market || 'US'
+      };
+      historyLoader = function () {
+        return PT.StockAPI.getHistory(stockAsset, 180);
+      };
+    }
+
+    return cacheWrap(cacheKey, target.assetType === 'crypto' ? (1000 * 60 * 60 * 4) : (1000 * 60 * 60 * 8), historyLoader)
+      .then(function (hist) {
+        if (reqId !== INDICATOR_EXPLORER.chartRequestId) return;
+        var rows = Array.isArray(hist) ? hist : [];
+        INDICATOR_EXPLORER.chart = {
+          title: (target.label || target.symbol || 'Asset') + ' Chart',
+          meta: rows.length ? ('Loaded ' + rows.length + ' candles') : 'No chart data available.',
+          labels: rows.map(function (p) { return p.t; }),
+          values: rows.map(function (p) { return p.c; }),
+          label: (target.symbol || '').replace('/USD', '') + ' price'
+        };
+        renderIndicatorExplorer();
+        saveIndicatorExplorerSession(target.mode);
+      })
+      .catch(function () {
+        if (reqId !== INDICATOR_EXPLORER.chartRequestId) return;
+        INDICATOR_EXPLORER.chart = {
+          title: (target.label || target.symbol || 'Asset') + ' Chart',
+          meta: 'Chart data unavailable.',
+          labels: [],
+          values: [],
+          label: ''
+        };
+        renderIndicatorExplorer();
+        saveIndicatorExplorerSession(target.mode);
+      });
+  }
+
+  function selectIndicatorExplorerItem(item) {
+    var target = indicatorTargetFromExplorerItem(item, INDICATOR_EXPLORER.mode);
+    if (!target) return;
+    // Invalidate in-flight autocomplete responses so the list cannot re-open after selection.
+    INDICATOR_EXPLORER.requestId += 1;
+    INDICATOR_EXPLORER.results = [];
+    INDICATOR_EXPLORER.query = target.symbol || '';
+    INDICATOR_EXPLORER.selected = target;
+    hideIndicatorExplorerSearchResults();
+    if (ui.el.indicatorExplorerSearchInput) {
+      ui.el.indicatorExplorerSearchInput.value = target.label;
+    }
+    fetchIndicatorExplorerChart(target);
+    INDICATOR_EXPLORER.panel = rebuildIndicatorPanelState(target.mode, target, {
+      usedCache: true,
+      assetLabel: target.label
+    }, false);
+    renderIndicatorExplorer();
+    saveIndicatorExplorerSession(target.mode);
+    setStatus('Loading ' + target.label + ' indicators...');
+    refreshIndicatorsForMode(target.mode, target, false).then(function (result) {
+      INDICATOR_EXPLORER.panel = result && result.state ? result.state : rebuildIndicatorPanelState(target.mode, target, {}, false);
+      renderIndicatorExplorer();
+      saveIndicatorExplorerSession(target.mode);
+      setStatus((result && result.ok ? 'Loaded ' : 'Updated ') + target.label + ' indicators');
+    }).catch(function (err) {
+      INDICATOR_EXPLORER.panel = rebuildIndicatorPanelState(target.mode, target, {
+        error: (err && err.message) || 'Indicator refresh failed',
+        usedCache: true
+      }, false);
+      renderIndicatorExplorer();
+      saveIndicatorExplorerSession(target.mode);
+      setStatus('Indicator refresh failed');
+    });
   }
 
   function renderAllocation(items) {
@@ -1129,6 +1601,9 @@
       return;
     }
     var quoteData = getMarketFor(asset);
+    if (!state.news[assetKey(asset)]) {
+      hydrateAssetNewsFromCache(asset, 1000 * 60 * 60 * 24 * 3);
+    }
     if (asset.type === 'stock') {
       var clock = getStockMarketClock(asset.market, new Date());
       quoteData = Object.assign({}, quoteData || {}, {
@@ -1232,7 +1707,7 @@
 
   function syncCryptoParticles() {
     if (!CRYPTO_PARTICLES || typeof CRYPTO_PARTICLES.setActive !== 'function') return;
-    var active = state.app.mode === 'crypto' && !!state.app.cryptoParticlesEnabled;
+    var active = !!state.app.cryptoParticlesEnabled;
     CRYPTO_PARTICLES.setActive(active);
   }
 
@@ -1866,20 +2341,57 @@
     var fetcher = function () {
       return PT.NewsAPI.getNews(asset, { source: source });
     };
+    var saveSnapshot = function (items) {
+      if (!PT.NewsAPI || typeof PT.NewsAPI.saveCachedSnapshot !== 'function') return;
+      PT.NewsAPI.saveCachedSnapshot(key, items, { fetchedAt: Date.now(), source: source });
+    };
+    var loadRemoteSnapshot = function () {
+      if (!PT.NewsAPI || typeof PT.NewsAPI.getCachedSnapshot !== 'function') return Promise.resolve(null);
+      return PT.NewsAPI.getCachedSnapshot(key).then(function (snapshot) {
+        var items = snapshot && Array.isArray(snapshot.items) ? snapshot.items : null;
+        if (!items || !items.length) return null;
+        storage.setCached(state.caches, key, items);
+        storage.saveCache(state.caches);
+        return items;
+      });
+    };
     var load = options.force
       ? fetcher().then(function (items) {
         storage.setCached(state.caches, key, items);
         storage.saveCache(state.caches);
+        saveSnapshot(items);
         return items;
       })
-      : cacheWrap(key, 1000 * 60 * 60 * 2, fetcher);
+      : (function () {
+        var localFresh = storage.getCached(state.caches, key, 1000 * 60 * 60 * 2);
+        if (localFresh) return Promise.resolve(localFresh);
+        return loadRemoteSnapshot().then(function (remoteItems) {
+          if (remoteItems) return remoteItems;
+          return fetcher().then(function (items) {
+            storage.setCached(state.caches, key, items);
+            storage.saveCache(state.caches);
+            saveSnapshot(items);
+            return items;
+          });
+        });
+      })();
     return load.then(function (items) {
       state.news[assetKey(asset)] = items;
       renderDetails();
     }).catch(function () {
       var cached = storage.getCached(state.caches, key, 1000 * 60 * 60 * 24 * 3);
-      state.news[assetKey(asset)] = cached || [];
-      renderDetails();
+      if (cached) {
+        state.news[assetKey(asset)] = cached;
+        renderDetails();
+        return;
+      }
+      loadRemoteSnapshot().then(function (remoteItems) {
+        state.news[assetKey(asset)] = remoteItems || [];
+        renderDetails();
+      }).catch(function () {
+        state.news[assetKey(asset)] = [];
+        renderDetails();
+      });
     });
   }
 
@@ -1893,22 +2405,60 @@
       }
       return PT.NewsAPI.getNews({ type: 'stock', symbol: 'SPY', name: 'US Market (SPY)' }, { source: source });
     };
+    var saveSnapshot = function (items) {
+      if (!PT.NewsAPI || typeof PT.NewsAPI.saveCachedSnapshot !== 'function') return;
+      PT.NewsAPI.saveCachedSnapshot(key, items, { fetchedAt: Date.now(), source: source });
+    };
+    var loadRemoteSnapshot = function () {
+      if (!PT.NewsAPI || typeof PT.NewsAPI.getCachedSnapshot !== 'function') return Promise.resolve(null);
+      return PT.NewsAPI.getCachedSnapshot(key).then(function (snapshot) {
+        var items = snapshot && Array.isArray(snapshot.items) ? snapshot.items : null;
+        if (!items || !items.length) return null;
+        storage.setCached(state.caches, key, items);
+        storage.saveCache(state.caches);
+        return items;
+      });
+    };
     var load = options.force
       ? fetcher().then(function (items) {
         storage.setCached(state.caches, key, items);
         storage.saveCache(state.caches);
+        saveSnapshot(items);
         return items;
       })
-      : cacheWrap(key, 1000 * 60 * 60 * 2, fetcher);
+      : (function () {
+        var localFresh = storage.getCached(state.caches, key, 1000 * 60 * 60 * 2);
+        if (localFresh) return Promise.resolve(localFresh);
+        return loadRemoteSnapshot().then(function (remoteItems) {
+          if (remoteItems) return remoteItems;
+          return fetcher().then(function (items) {
+            storage.setCached(state.caches, key, items);
+            storage.saveCache(state.caches);
+            saveSnapshot(items);
+            return items;
+          });
+        });
+      })();
     return load.then(function (items) {
       state.news['stocks:general'] = items || [];
       renderDetails();
       return items;
     }).catch(function () {
       var cached = storage.getCached(state.caches, key, 1000 * 60 * 60 * 24 * 3);
-      state.news['stocks:general'] = cached || [];
-      renderDetails();
-      return state.news['stocks:general'];
+      if (cached) {
+        state.news['stocks:general'] = cached;
+        renderDetails();
+        return state.news['stocks:general'];
+      }
+      return loadRemoteSnapshot().then(function (remoteItems) {
+        state.news['stocks:general'] = remoteItems || [];
+        renderDetails();
+        return state.news['stocks:general'];
+      }).catch(function () {
+        state.news['stocks:general'] = [];
+        renderDetails();
+        return state.news['stocks:general'];
+      });
     });
   }
 
@@ -1994,6 +2544,9 @@
   function refreshAssetData(asset, includeNews, options) {
     options = options || {};
     if (!asset) return Promise.resolve();
+    if (includeNews && options.onSelect && !Array.isArray(state.news[assetKey(asset)])) {
+      hydrateAssetNewsFromCache(asset, 1000 * 60 * 60 * 24 * 3);
+    }
     var detailStampKey = assetDetailRefreshCacheKey(asset, includeNews);
     var needsNewsRefreshOnSelect = !!(includeNews && options.onSelect && asset.type === 'stock' && !hasFreshNews(asset, 1000 * 60 * 60));
     if (hasFreshAssetDetail(asset, includeNews) && !needsNewsRefreshOnSelect) {
@@ -2076,7 +2629,10 @@
       renderAll();
       var failed = assets.length - updated;
       var nowText = new Date().toLocaleTimeString();
-      var indicatorsFailed = indicatorMeta && (indicatorMeta.status !== 'fulfilled' || (indicatorMeta.value && indicatorMeta.value.ok === false && !indicatorMeta.value.disabled));
+      var indicatorsFailed = indicatorMeta && (
+        indicatorMeta.status !== 'fulfilled' ||
+        (indicatorMeta.value && indicatorMeta.value.ok === false && !indicatorMeta.value.disabled && !indicatorMeta.value.empty)
+      );
       if (updated <= 0 && cachedOnly > 0) {
         setStatus('Stocks quotes unavailable, using cached values • ' + nowText);
       } else if (updated <= 0) {
@@ -2240,7 +2796,7 @@
       return Promise.allSettled(jobsCrypto).then(function (results) {
         var quoteMeta = results[0] && results[0].status === 'fulfilled' ? results[0].value : { updated: 0, failed: rawItems.length, staleUsed: 0 };
         var globalOk = results[1] && results[1].status === 'fulfilled' && results[1].value && results[1].value.ok;
-        var indicatorOk = results[2] && results[2].status === 'fulfilled' && results[2].value && (results[2].value.ok || results[2].value.disabled);
+        var indicatorOk = results[2] && results[2].status === 'fulfilled' && results[2].value && (results[2].value.ok || results[2].value.disabled || results[2].value.empty);
         var detail = selectedCrypto && results[3] && results[3].status === 'fulfilled' ? results[3].value : null;
         renderAll();
         var nowText = new Date().toLocaleTimeString();
@@ -2376,6 +2932,11 @@
     }
     renderAll();
     refreshAssetData(asset, includeNewsOnSelect, { onSelect: true });
+    refreshIndicatorsForMode(state.app.mode).then(function () {
+      renderAll();
+    }).catch(function () {
+      renderAll();
+    });
   }
 
   function bindEvents() {
@@ -2383,6 +2944,20 @@
     if (ui.el.layoutToggle) ui.el.layoutToggle.addEventListener('click', applyLayoutToggle);
     if (ui.el.demoModeToggle) ui.el.demoModeToggle.addEventListener('click', applyDemoModeToggle);
     if (ui.el.apiSourcesBtn) ui.el.apiSourcesBtn.addEventListener('click', openApiSourcesModal);
+    if (ui.el.indicatorExplorerBtn) ui.el.indicatorExplorerBtn.addEventListener('click', openIndicatorExplorerModal);
+    if (ui.el.indicatorExplorerCloseBtn) ui.el.indicatorExplorerCloseBtn.addEventListener('click', closeIndicatorExplorerModal);
+    if (ui.el.indicatorExplorerStocksTab) ui.el.indicatorExplorerStocksTab.addEventListener('click', function () { setIndicatorExplorerMode('stocks'); });
+    if (ui.el.indicatorExplorerCryptoTab) ui.el.indicatorExplorerCryptoTab.addEventListener('click', function () { setIndicatorExplorerMode('crypto'); });
+    if (ui.el.indicatorExplorerSearchInput) ui.el.indicatorExplorerSearchInput.addEventListener('input', runIndicatorExplorerSearch);
+    if (ui.el.indicatorExplorerSearchList) {
+      ui.el.indicatorExplorerSearchList.addEventListener('click', function (event) {
+        var btn = event.target.closest('[data-indicator-explorer-idx]');
+        if (!btn) return;
+        var idx = Number(btn.getAttribute('data-indicator-explorer-idx'));
+        if (!isFinite(idx) || idx < 0 || idx >= INDICATOR_EXPLORER.results.length) return;
+        selectIndicatorExplorerItem(INDICATOR_EXPLORER.results[idx]);
+      });
+    }
     if (ui.el.apiDebugToggle) ui.el.apiDebugToggle.addEventListener('click', applyApiDebugToggle);
     if (ui.el.holdingsPrivacyToggle) ui.el.holdingsPrivacyToggle.addEventListener('click', applyHoldingsPrivacyToggle);
     if (ui.el.cryptoParticlesToggle) ui.el.cryptoParticlesToggle.addEventListener('click', applyCryptoParticlesToggle);
@@ -2452,6 +3027,11 @@
       });
     }
     if (ui.el.apiSourcesModalCloseBtn) ui.el.apiSourcesModalCloseBtn.addEventListener('click', closeApiSourcesModal);
+    if (ui.el.indicatorExplorerModal) {
+      ui.el.indicatorExplorerModal.addEventListener('click', function (e) {
+        if (e.target && e.target.getAttribute('data-close-indicator-explorer') === '1') closeIndicatorExplorerModal();
+      });
+    }
     if (ui.el.apiSourcesModal) {
       ui.el.apiSourcesModal.addEventListener('click', function (e) {
         if (e.target && e.target.getAttribute('data-close-api-sources-modal') === '1') closeApiSourcesModal();

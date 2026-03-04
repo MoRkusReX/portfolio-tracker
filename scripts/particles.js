@@ -1,4 +1,4 @@
-// Renders the optional animated particle background used in crypto mode.
+// Renders the optional animated particle background used behind the app.
 (function () {
   var PT = (window.PT = window.PT || {});
 

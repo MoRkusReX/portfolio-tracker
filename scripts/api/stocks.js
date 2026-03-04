@@ -154,6 +154,18 @@
     });
   }
 
+  function inferPrevCloseFromHistoryRows(rows, quoteDate) {
+    var list = Array.isArray(rows) ? rows.slice() : [];
+    if (!list.length) return null;
+    var latest = list[list.length - 1];
+    var safeQuoteDate = String(quoteDate || '').trim();
+    if (safeQuoteDate && latest && String(latest.date || '') === safeQuoteDate) {
+      if (list.length < 2) return null;
+      return Number(list[list.length - 2].close);
+    }
+    return latest ? Number(latest.close) : null;
+  }
+
   function withStooqDailyChange(asset, baseQuote, options) {
     options = options || {};
     if (!baseQuote || !isFinite(Number(baseQuote.price))) {
@@ -209,8 +221,7 @@
           .sort(function (a, b) {
             return String(a.date).localeCompare(String(b.date));
           });
-        if (rows.length < 2) return null;
-        return Number(rows[rows.length - 2].close);
+        return inferPrevCloseFromHistoryRows(rows, baseQuote && baseQuote.date);
       });
     }).finally(function () {
       delete PREV_CLOSE_IN_FLIGHT[cacheKey];

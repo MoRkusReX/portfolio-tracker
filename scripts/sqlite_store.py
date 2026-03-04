@@ -42,8 +42,20 @@ def ensure_schema(conn):
           volume REAL,
           source TEXT,
           fetched_at INTEGER NOT NULL,
+          last_accessed_at INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY (symbol, interval, candle_time)
         )
+        """
+    )
+    try:
+        conn.execute("ALTER TABLE indicator_candles ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        """
+        UPDATE indicator_candles
+        SET last_accessed_at = fetched_at
+        WHERE last_accessed_at IS NULL OR last_accessed_at <= 0
         """
     )
     conn.execute(
@@ -133,6 +145,15 @@ def indicator_summary(conn, symbol, interval):
 
 # Reads the latest indicator candles for a symbol/interval pair.
 def get_candles(conn, symbol, interval, limit):
+    accessed_at = utc_now_ms()
+    conn.execute(
+        """
+        UPDATE indicator_candles
+        SET last_accessed_at = ?
+        WHERE symbol = ? AND interval = ?
+        """,
+        (accessed_at, symbol, interval),
+    )
     rows = conn.execute(
         """
         SELECT candle_time, open, high, low, close, volume, fetched_at, source
@@ -199,14 +220,14 @@ def upsert_candles(conn):
             volume_v = None if volume is None else float(volume)
         except Exception:
             volume_v = None
-        rows.append((symbol, interval, candle_time, open_v, high_v, low_v, close_v, volume_v, source, fetched_at))
+        rows.append((symbol, interval, candle_time, open_v, high_v, low_v, close_v, volume_v, source, fetched_at, fetched_at))
     if rows:
         conn.executemany(
             """
             INSERT INTO indicator_candles (
-              symbol, interval, candle_time, open, high, low, close, volume, source, fetched_at
+              symbol, interval, candle_time, open, high, low, close, volume, source, fetched_at, last_accessed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol, interval, candle_time) DO UPDATE SET
               open = excluded.open,
               high = excluded.high,
@@ -214,12 +235,68 @@ def upsert_candles(conn):
               close = excluded.close,
               volume = excluded.volume,
               source = excluded.source,
-              fetched_at = excluded.fetched_at
+              fetched_at = excluded.fetched_at,
+              last_accessed_at = excluded.last_accessed_at
             """,
             rows,
         )
         conn.commit()
     return {"ok": True, "inserted": len(rows), "fetchedAt": fetched_at}
+
+
+def pinned_indicator_symbols(conn):
+    row = conn.execute(
+        "SELECT payload_json FROM app_state WHERE state_key = ?",
+        ("portfolio",),
+    ).fetchone()
+    if not row:
+        return set()
+    try:
+        payload = json.loads(row["payload_json"])
+    except Exception:
+        return set()
+    portfolio = payload.get("portfolio") if isinstance(payload, dict) and isinstance(payload.get("portfolio"), dict) else payload
+    if not isinstance(portfolio, dict):
+        return set()
+    pinned = set()
+    for item in portfolio.get("stocks", []):
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("yahooSymbol") or item.get("symbol") or "").strip().upper()
+        if symbol:
+            pinned.add(symbol)
+    for item in portfolio.get("crypto", []):
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if symbol:
+            pinned.add(f"{symbol}/USD")
+    return pinned
+
+
+def prune_stale_indicators(conn, max_age_ms):
+    cutoff = utc_now_ms() - max(0, int(max_age_ms))
+    pinned = sorted(pinned_indicator_symbols(conn))
+    if pinned:
+        placeholders = ",".join("?" for _ in pinned)
+        cur = conn.execute(
+            f"""
+            DELETE FROM indicator_candles
+            WHERE last_accessed_at < ?
+              AND symbol NOT IN ({placeholders})
+            """,
+            [cutoff] + pinned,
+        )
+    else:
+        cur = conn.execute(
+            """
+            DELETE FROM indicator_candles
+            WHERE last_accessed_at < ?
+            """,
+            (cutoff,),
+        )
+    conn.commit()
+    return {"ok": True, "deleted": int(cur.rowcount or 0)}
 
 
 # Dispatches command-line requests to the appropriate SQLite helper action.
@@ -250,6 +327,10 @@ def main():
             out = get_candles(conn, sys.argv[3], sys.argv[4], max(1, int(sys.argv[5])))
         elif command == "upsert_candles":
             out = upsert_candles(conn)
+        elif command == "prune_stale_indicators":
+            if len(sys.argv) < 4:
+                fail("Missing max age")
+            out = prune_stale_indicators(conn, int(sys.argv[3]))
         else:
             fail("Unsupported command")
         print(json.dumps(out))

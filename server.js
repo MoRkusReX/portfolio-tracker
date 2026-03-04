@@ -55,6 +55,7 @@ const INDICATOR_POLICY = {
   '1week': { warmup: 260, incremental: 8, maxCandles: 300, bucket: 'week' },
   '1month': { warmup: 120, incremental: 5, maxCandles: 160, bucket: 'month' }
 };
+const INDICATOR_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
 
 app.use(cors({ origin: true, methods: ['GET', 'PUT', 'OPTIONS'] }));
 app.use(express.json({ limit: '1mb' }));
@@ -559,6 +560,71 @@ app.put('/api/portfolio', async (req, res) => {
   }
 });
 
+// Builds a stable SQLite key for per-scope news snapshots.
+function dbNewsStateKey(rawKey) {
+  const key = String(rawKey || '').trim();
+  if (!key) return '';
+  return `news:${key}`;
+}
+
+// Reads the latest persisted news payload for a given cache key.
+app.get('/api/news-cache', async (req, res) => {
+  try {
+    const key = String(req.query.key || '').trim();
+    const stateKey = dbNewsStateKey(key);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_key' });
+    }
+    const stored = await runDb('get_state', [stateKey]);
+    const payload = stored && stored.payload && typeof stored.payload === 'object' ? stored.payload : {};
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    return res.json({
+      found: !!(stored && stored.found),
+      key,
+      items,
+      fetchedAt: Number(payload.fetchedAt || 0) || 0,
+      source: String(payload.source || '').trim() || null,
+      updatedAt: Number(stored && stored.updatedAt || 0) || 0
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'news_cache_read_failed',
+      detail: String(err && err.message || 'Failed to load news cache').slice(0, 240)
+    });
+  }
+});
+
+// Persists the latest fetched news payload for a given cache key.
+app.put('/api/news-cache', async (req, res) => {
+  try {
+    const key = String(req.body && req.body.key || '').trim();
+    const stateKey = dbNewsStateKey(key);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_key' });
+    }
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
+    if (!items) {
+      return res.status(400).json({ error: 'invalid_items' });
+    }
+    const payload = {
+      items,
+      fetchedAt: Math.max(0, Number(req.body && req.body.fetchedAt || 0) || Date.now()),
+      source: String(req.body && req.body.source || '').trim() || null
+    };
+    const result = await runDb('set_state', [stateKey], payload);
+    return res.json({
+      ok: true,
+      key,
+      updatedAt: Number(result && result.updatedAt || 0) || Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'news_cache_write_failed',
+      detail: String(err && err.message || 'Failed to save news cache').slice(0, 240)
+    });
+  }
+});
+
 app.get('/api/twelvedata/time-series', async (req, res) => {
   try {
     const symbol = String(req.query.symbol || '').trim().toUpperCase();
@@ -573,6 +639,7 @@ app.get('/api/twelvedata/time-series', async (req, res) => {
       return res.status(400).json({ error: 'invalid_interval' });
     }
 
+    await runDb('prune_stale_indicators', [String(INDICATOR_RETENTION_MS)]);
     const summary = await runDb('indicator_summary', [symbol, interval]);
     const hasStored = !!(summary && Number(summary.count || 0) > 0);
     const latestFetchedAt = Number(summary && summary.latestFetchedAt || 0) || 0;
