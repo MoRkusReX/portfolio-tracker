@@ -1,3 +1,4 @@
+/* Global layout, base typography, and shared app shell styles. */
 :root {
   --font-display: "Space Grotesk", "Segoe UI", sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;

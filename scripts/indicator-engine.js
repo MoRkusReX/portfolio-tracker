@@ -1,3 +1,4 @@
+// Provides pure technical-indicator calculations and summary scoring for indicator panels.
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = factory();

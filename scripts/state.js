@@ -1,3 +1,4 @@
+// Defines static catalogs, defaults, and the central in-memory application state object.
 (function () {
   var PT = (window.PT = window.PT || {});
 

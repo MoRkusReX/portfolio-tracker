@@ -1,3 +1,4 @@
+// Instruments fetch calls and displays API request diagnostics in the debug panel.
 (function () {
   var PT = (window.PT = window.PT || {});
 

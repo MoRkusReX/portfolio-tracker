@@ -1,3 +1,4 @@
+// Lightweight assertions that validate the core indicator math helpers.
 const assert = require('assert');
 const engine = require('./indicator-engine.js');
 

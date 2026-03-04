@@ -1,0 +1,14 @@
+# Runs the portfolio tracker container with a mounted data directory for persistent SQLite storage.
+services:
+  portfolio-tracker:
+    build: .
+    ports:
+      - "5500:5500"
+    environment:
+      PORT: 5500
+      HOST: 0.0.0.0
+      DB_PATH: /app/data/portfolio-tracker.db
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+      COINMARKETCAP_API_KEY: ${COINMARKETCAP_API_KEY:-}
+    volumes:
+      - ./data:/app/data

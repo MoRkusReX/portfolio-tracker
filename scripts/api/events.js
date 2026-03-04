@@ -1,3 +1,4 @@
+// Fetches stock and crypto event data for the events panel.
 (function () {
   var PT = (window.PT = window.PT || {});
 
@@ -10,7 +11,7 @@
   }
 
   function proxyBase() {
-    return String(appConfig().proxyBase || 'http://localhost:3000').replace(/\/$/, '');
+    return String(appConfig().proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin)).replace(/\/$/, '');
   }
 
   function proxifyUrl(url) {

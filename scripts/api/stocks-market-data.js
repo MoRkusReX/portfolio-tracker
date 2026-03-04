@@ -1,3 +1,4 @@
+// Batches stock quote requests through the proxy with in-memory throttling and caching.
 (function () {
   var PT = (window.PT = window.PT || {});
 
@@ -19,7 +20,7 @@
   }
 
   function proxyBase() {
-    return String(appConfig().proxyBase || 'http://localhost:3000').replace(/\/$/, '');
+    return String(appConfig().proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin)).replace(/\/$/, '');
   }
 
   function proxyBaseCandidates() {

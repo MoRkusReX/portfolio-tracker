@@ -1,9 +1,13 @@
+// Server entrypoint that serves the app, proxies external APIs, and owns SQLite-backed shared persistence.
+// Reads local config files and serves static assets.
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 
+// Loads .env values without introducing another dependency.
 function loadDotEnv() {
   const envPath = path.join(__dirname, '.env');
   if (!fs.existsSync(envPath)) return;
@@ -25,22 +29,42 @@ function loadDotEnv() {
 
 loadDotEnv();
 
+// Main Express app instance for UI and API routes.
 const app = express();
-const PORT = 3000;
+// Configures the listening port for both UI and API traffic.
+const PORT = Math.max(1, Number(process.env.PORT || 5500) || 5500);
+// Configures the listening host so the app can be exposed on the LAN.
+const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
+// Controls how long proxied Stocktwits responses stay in memory.
 const STOCKTWITS_CACHE_TTL_MS = 60 * 1000;
+// Keeps short-lived Stocktwits responses in memory between requests.
 const stocktwitsCache = new Map();
+// Holds the Twelve Data API key for server-side indicator and quote requests.
 const TWELVEDATA_API_KEY = String(process.env.TWELVEDATA_API_KEY || '').trim();
+// Holds the CoinMarketCap API key for server-side crypto quote requests.
 const COINMARKETCAP_API_KEY = String(process.env.COINMARKETCAP_API_KEY || '').trim();
+// Chooses the Python interpreter used for the SQLite bridge helper.
+const PYTHON_BIN = String(process.env.PYTHON_BIN || 'python3').trim() || 'python3';
+// Resolves the on-disk SQLite database location.
+const DB_PATH = path.resolve(__dirname, String(process.env.DB_PATH || path.join('data', 'portfolio-tracker.db')));
+// Points to the Python helper that executes SQLite operations.
+const DB_SCRIPT = path.join(__dirname, 'scripts', 'sqlite_store.py');
+// Defines warmup and incremental fetch sizes for each supported indicator interval.
+const INDICATOR_POLICY = {
+  '1day': { warmup: 300, incremental: 12, maxCandles: 360, bucket: 'day' },
+  '1week': { warmup: 260, incremental: 8, maxCandles: 300, bucket: 'week' },
+  '1month': { warmup: 120, incremental: 5, maxCandles: 160, bucket: 'month' }
+};
 
-app.use(cors({
-  origin: ['http://127.0.0.1:5500', 'http://localhost:5500'],
-  methods: ['GET']
-}));
+app.use(cors({ origin: true, methods: ['GET', 'PUT', 'OPTIONS'] }));
+app.use(express.json({ limit: '1mb' }));
 
 // Shared axios config for external requests.
+// Provides a browser-like user agent for upstream services that gate bot traffic.
 const BROWSER_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
 
+// Shared axios instance for upstream text and proxy fetches.
 const http = axios.create({
   timeout: 10000,
   responseType: 'text',
@@ -49,12 +73,137 @@ const http = axios.create({
   }
 });
 
+// Converts a timestamp into the ISO week bucket used by weekly indicator freshness checks.
+function getIsoWeekKey(ts) {
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return '';
+  const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+  return `${utc.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+// Maps a timestamp into its daily, weekly, or monthly freshness bucket.
+function indicatorBucketKey(bucketType, ts) {
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return '';
+  if (bucketType === 'week') return getIsoWeekKey(ts);
+  if (bucketType === 'month') return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+// Accepts either the wrapped or raw portfolio shape and normalizes it.
+function normalizePortfolioShape(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const candidate = raw.portfolio && typeof raw.portfolio === 'object' ? raw.portfolio : raw;
+  if (!candidate || !Array.isArray(candidate.stocks) || !Array.isArray(candidate.crypto)) return null;
+  return {
+    stocks: candidate.stocks,
+    crypto: candidate.crypto
+  };
+}
+
+// Runs a command against the Python SQLite bridge and parses the JSON response.
+async function runDb(command, args, input) {
+  const commandArgs = [DB_SCRIPT, DB_PATH, command].concat(Array.isArray(args) ? args : []);
+  const options = {
+    encoding: 'utf8',
+    maxBuffer: 4 * 1024 * 1024
+  };
+  if (input !== undefined) options.input = JSON.stringify(input);
+  const stdout = String(execFileSync(PYTHON_BIN, commandArgs, options) || '').trim();
+  if (!stdout) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (err) {
+    throw new Error(`Invalid DB response: ${stdout.slice(0, 200)}`);
+  }
+  if (parsed && parsed.error) throw new Error(parsed.error);
+  return parsed;
+}
+
+// Chooses fetch sizes and retention limits for a requested indicator interval.
+function indicatorPolicy(interval, requestedOutputsize) {
+  const base = INDICATOR_POLICY[interval] || INDICATOR_POLICY['1day'];
+  const requested = Math.max(1, Math.min(5000, Number(requestedOutputsize || base.warmup) || base.warmup));
+  return {
+    warmup: Math.max(base.warmup, requested),
+    incremental: base.incremental,
+    maxCandles: base.maxCandles,
+    bucket: base.bucket
+  };
+}
+
+// Fetches fresh indicator candles from Twelve Data when the local cache is stale.
+async function fetchIndicatorSeries(symbol, interval, outputsize) {
+  if (!TWELVEDATA_API_KEY) {
+    const err = new Error('twelvedata_key_missing');
+    err.statusCode = 500;
+    throw err;
+  }
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&outputsize=${encodeURIComponent(outputsize)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+  const response = await axios.get(url, {
+    timeout: 10000,
+    headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
+    validateStatus: () => true
+  });
+
+  if (response.status !== 200) {
+    const detail = typeof response.data === 'string'
+      ? response.data
+      : JSON.stringify(response.data || {});
+    const err = new Error(String(detail || 'Twelve Data time_series failed').slice(0, 240));
+    err.statusCode = response.status === 429 ? 429 : (response.status || 500);
+    err.errorCode = response.status === 429 ? 'twelvedata_rate_limited' : 'twelvedata_failed';
+    throw err;
+  }
+
+  const data = response.data || {};
+  if (!data || data.status === 'error' || !Array.isArray(data.values)) {
+    const detail = String((data && (data.message || data.code)) || 'No time series values returned').slice(0, 240);
+    const limited = /limit|quota|too many/i.test(String(data && data.message || ''));
+    const err = new Error(detail);
+    err.statusCode = limited ? 429 : 500;
+    err.errorCode = limited ? 'twelvedata_rate_limited' : 'twelvedata_failed';
+    throw err;
+  }
+
+  return {
+    meta: data.meta || {},
+    values: data.values,
+    status: data.status || 'ok',
+    source: 'twelvedata',
+    fetchedAt: Date.now()
+  };
+}
+
+// Reads the latest persisted indicator candles from SQLite.
+async function getStoredIndicatorRows(symbol, interval, limit) {
+  const payload = await runDb('get_candles', [symbol, interval, String(limit)]);
+  return payload || { values: [], count: 0, latestFetchedAt: 0 };
+}
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+app.get('/index.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+app.use('/styles', express.static(path.join(__dirname, 'styles')));
+app.use('/scripts', express.static(path.join(__dirname, 'scripts')));
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
+
+// Normalizes a stock symbol into the Stooq symbol format used by fallback routes.
 function normalizeStockSymbol(symbol) {
   const raw = String(symbol || '').trim().toLowerCase();
   if (!raw) return '';
   return raw.includes('.') ? raw : `${raw}.us`;
 }
 
+// Parses a simple CSV string into an array of row objects.
 function parseCsv(text) {
   const lines = String(text || '').trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return [];
@@ -67,11 +216,13 @@ function parseCsv(text) {
   });
 }
 
+// Safely converts an arbitrary value into a finite number or null.
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
+// Converts a Twelve Data quote row into the quote shape expected by the UI.
 function normalizeTdQuoteRow(row, symbolFallback) {
   const symbol = String((row && (row.symbol || row.meta && row.meta.symbol)) || symbolFallback || '').trim().toUpperCase();
   const close = num(row && (row.close != null ? row.close : row.price));
@@ -362,11 +513,58 @@ app.get('/api/stocks/quotes', async (req, res) => {
 
 // GET /api/twelvedata/time-series?symbol=TSLA&interval=1day&outputsize=300
 // Proxies Twelve Data time_series for the Indicators panel using the server-side API key.
+app.get('/api/portfolio', async (req, res) => {
+  try {
+    const stored = await runDb('get_state', ['portfolio']);
+    return res.json({
+      portfolio: normalizePortfolioShape(stored && stored.payload),
+      updatedAt: Number(stored && stored.updatedAt || 0) || 0
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'portfolio_read_failed',
+      detail: String(err && err.message || 'Failed to load portfolio').slice(0, 240)
+    });
+  }
+});
+
+app.put('/api/portfolio', async (req, res) => {
+  try {
+    const current = await runDb('get_state', ['portfolio']);
+    const currentUpdatedAt = Number(current && current.updatedAt || 0) || 0;
+    const baseUpdatedAt = Math.max(0, Number(req.body && req.body.baseUpdatedAt || 0) || 0);
+    const portfolio = normalizePortfolioShape(req.body);
+    if (!portfolio) {
+      return res.status(400).json({ error: 'invalid_portfolio' });
+    }
+    if (baseUpdatedAt !== currentUpdatedAt) {
+      return res.status(409).json({
+        error: 'portfolio_conflict',
+        detail: 'Stale portfolio revision',
+        portfolio: normalizePortfolioShape(current && current.payload),
+        updatedAt: currentUpdatedAt
+      });
+    }
+    const result = await runDb('set_state', ['portfolio'], portfolio);
+    return res.json({
+      ok: true,
+      portfolio,
+      updatedAt: Number(result && result.updatedAt || 0) || Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'portfolio_write_failed',
+      detail: String(err && err.message || 'Failed to save portfolio').slice(0, 240)
+    });
+  }
+});
+
 app.get('/api/twelvedata/time-series', async (req, res) => {
   try {
     const symbol = String(req.query.symbol || '').trim().toUpperCase();
     const interval = String(req.query.interval || '').trim().toLowerCase();
     const outputsize = Math.max(1, Math.min(5000, Number(req.query.outputsize || 300) || 300));
+    const policy = indicatorPolicy(interval, outputsize);
 
     if (!symbol) {
       return res.status(400).json({ error: 'missing_symbol' });
@@ -374,43 +572,53 @@ app.get('/api/twelvedata/time-series', async (req, res) => {
     if (!['1day', '1week', '1month'].includes(interval)) {
       return res.status(400).json({ error: 'invalid_interval' });
     }
-    if (!TWELVEDATA_API_KEY) {
-      return res.status(500).json({ error: 'twelvedata_key_missing' });
+
+    const summary = await runDb('indicator_summary', [symbol, interval]);
+    const hasStored = !!(summary && Number(summary.count || 0) > 0);
+    const latestFetchedAt = Number(summary && summary.latestFetchedAt || 0) || 0;
+    const isFresh = hasStored && indicatorBucketKey(policy.bucket, latestFetchedAt) === indicatorBucketKey(policy.bucket, Date.now());
+    let upstream = null;
+
+    if (!isFresh) {
+      try {
+        upstream = await fetchIndicatorSeries(symbol, interval, hasStored ? policy.incremental : policy.warmup);
+        await runDb('upsert_candles', [], {
+          symbol,
+          interval,
+          source: upstream.source,
+          fetchedAt: upstream.fetchedAt,
+          candles: upstream.values
+        });
+      } catch (err) {
+        if (!hasStored) {
+          return res.status(Number(err && err.statusCode || 500) || 500).json({
+            error: err && err.errorCode ? err.errorCode : 'twelvedata_failed',
+            status: Number(err && err.statusCode || 500) || 500,
+            detail: String(err && err.message || 'Twelve Data time_series failed').slice(0, 240)
+          });
+        }
+      }
     }
 
-    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&outputsize=${encodeURIComponent(outputsize)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
-    const response = await axios.get(url, {
-      timeout: 10000,
-      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
-      validateStatus: () => true
-    });
-
-    if (response.status !== 200) {
-      const detail = typeof response.data === 'string'
-        ? response.data
-        : JSON.stringify(response.data || {});
-      return res.status(response.status || 500).json({
-        error: response.status === 429 ? 'twelvedata_rate_limited' : 'twelvedata_failed',
-        status: response.status || 500,
-        detail: String(detail || 'Twelve Data time_series failed').slice(0, 240)
-      });
-    }
-
-    const data = response.data || {};
-    if (!data || data.status === 'error' || !Array.isArray(data.values)) {
-      return res.status(/limit|quota|too many/i.test(String(data && data.message || '')) ? 429 : 500).json({
-        error: /limit|quota|too many/i.test(String(data && data.message || '')) ? 'twelvedata_rate_limited' : 'twelvedata_failed',
-        detail: String((data && (data.message || data.code)) || 'No time series values returned').slice(0, 240),
-        upstream: data
+    const stored = await getStoredIndicatorRows(symbol, interval, policy.maxCandles);
+    if (!stored || !Array.isArray(stored.values) || !stored.values.length) {
+      return res.status(500).json({
+        error: 'twelvedata_failed',
+        detail: 'No indicator candles available'
       });
     }
 
     return res.json({
-      meta: data.meta || {},
-      values: data.values,
-      status: data.status || 'ok',
-      source: 'twelvedata',
-      fetchedAt: Date.now()
+      meta: upstream && upstream.meta ? upstream.meta : { symbol, interval },
+      values: stored.values,
+      status: 'ok',
+      source: upstream ? upstream.source : 'sqlite-cache',
+      fetchedAt: upstream ? upstream.fetchedAt : (Number(stored.latestFetchedAt || latestFetchedAt || 0) || Date.now()),
+      cache: {
+        persisted: true,
+        didFetch: !!upstream,
+        count: Number(stored.count || stored.values.length || 0) || 0
+      }
     });
   } catch (err) {
     return res.status(500).json({
@@ -682,6 +890,12 @@ app.get('/api/generic', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log('API running on http://localhost:3000');
+runDb('init').catch((err) => {
+  console.error('Failed to initialize SQLite store:', err && err.message ? err.message : err);
+  process.exit(1);
+}).then(() => {
+  app.listen(PORT, HOST, () => {
+    console.log(`Portfolio Tracker running on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
+    console.log(`SQLite store: ${DB_PATH}`);
+  });
 });

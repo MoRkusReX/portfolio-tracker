@@ -1,10 +1,11 @@
+// Fetches stock and crypto news feeds with proxy-aware fallbacks.
 (function () {
   var PT = (window.PT = window.PT || {});
 
   function proxifyUrl(url) {
     var cfg = window.PT_CONFIG || {};
     if (!cfg.useLocalProxy) return url;
-    var base = String(cfg.proxyBase || 'http://localhost:3000').replace(/\/$/, '');
+    var base = String(cfg.proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin)).replace(/\/$/, '');
     return base + '/api/generic?url=' + encodeURIComponent(url);
   }
 

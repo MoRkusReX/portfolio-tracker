@@ -1,16 +1,20 @@
+// Fetches normalized indicator candle series through the local proxy.
 (function () {
   var PT = (window.PT = window.PT || {});
 
+  // Resolves the proxy base URL used for indicator requests.
   function proxyBase() {
     var cfg = window.PT_CONFIG || {};
-    return String(cfg.proxyBase || 'http://localhost:3000').replace(/\/$/, '');
+    return String(cfg.proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin)).replace(/\/$/, '');
   }
 
+  // Safely coerces a raw value into a finite number or null.
   function num(value) {
     var n = Number(value);
     return isFinite(n) ? n : null;
   }
 
+  // Converts upstream candle rows into the compact normalized shape used by the app.
   function normalizeRows(values) {
     if (!Array.isArray(values)) return [];
     return values.map(function (row) {
@@ -34,6 +38,7 @@
     });
   }
 
+  // Performs a JSON request for indicator payloads.
   function fetchJson(url, debugLabel) {
     return fetch(url, { cache: 'no-store', __ptDebugLabel: debugLabel || '' }).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -42,6 +47,7 @@
   }
 
   PT.IndicatorAPI = {
+    // Fetches indicator candles for the requested symbol and interval through the proxy.
     getTimeSeries: function (symbol, interval, outputsize) {
       var safeSymbol = String(symbol || '').trim();
       var safeInterval = String(interval || '').trim();

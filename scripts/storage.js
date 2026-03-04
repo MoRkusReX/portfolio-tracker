@@ -1,5 +1,7 @@
+// Wraps browser-side persistence, import/export helpers, and server-backed portfolio sync.
 (function () {
   var PT = (window.PT = window.PT || {});
+  // Lists the localStorage keys reserved by the app.
   var KEYS = {
     portfolio: 'pt2026_portfolio',
     portfolioBackup: 'pt2026_portfolio_backup',
@@ -9,6 +11,7 @@
     cache: 'pt2026_cache'
   };
 
+  // Parses JSON without throwing when the stored value is corrupt.
   function safeParse(text, fallback) {
     try {
       return JSON.parse(text);
@@ -17,6 +20,7 @@
     }
   }
 
+  // Reads and parses a JSON value from localStorage.
   function read(key, fallback) {
     try {
       var raw = localStorage.getItem(key);
@@ -26,6 +30,7 @@
     }
   }
 
+  // Writes a JSON value into localStorage.
   function write(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
@@ -35,6 +40,28 @@
     }
   }
 
+  // Resolves the base URL used for server-backed portfolio sync requests.
+  function apiBase() {
+    var cfg = window.PT_CONFIG || {};
+    if (Object.prototype.hasOwnProperty.call(cfg, 'proxyBase')) {
+      return String(cfg.proxyBase || '').replace(/\/$/, '');
+    }
+    if (location.protocol === 'file:') return 'http://localhost:5500';
+    return String(location.origin || '').replace(/\/$/, '');
+  }
+
+  // Performs a JSON fetch with a minimal shared error path.
+  function fetchJson(url, options) {
+    return fetch(url, options || {}).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    });
+  }
+
+  // Serializes remote portfolio writes so saves stay ordered.
+  var remoteSaveQueue = Promise.resolve();
+
+  // Builds a filesystem-safe timestamp suffix for exported portfolio files.
   function timestampForFilename() {
     var d = new Date();
     function pad(n) { return String(n).padStart(2, '0'); }
@@ -46,10 +73,12 @@
       pad(d.getSeconds());
   }
 
+  // Checks whether a value matches the core portfolio shape.
   function isPortfolioShape(x) {
     return !!(x && Array.isArray(x.stocks) && Array.isArray(x.crypto));
   }
 
+  // Normalizes legacy and current portfolio payload formats into one record shape.
   function normalizePortfolioRecord(raw) {
     if (!raw) return null;
     // Legacy shape: { stocks, crypto }
@@ -66,6 +95,7 @@
     return null;
   }
 
+  // Normalizes legacy and current settings payload formats into one record shape.
   function normalizeSettingsRecord(raw) {
     if (!raw) return null;
     // New envelope shape.
@@ -83,6 +113,7 @@
   }
 
   PT.Storage = {
+    // Reads the newest local portfolio copy, preferring the freshest backup pair.
     loadPortfolio: function () {
       var primary = normalizePortfolioRecord(read(KEYS.portfolio, null));
       var backup = normalizePortfolioRecord(read(KEYS.portfolioBackup, null));
@@ -93,20 +124,24 @@
       if (backup) return backup.portfolio;
       return null;
     },
+    // Saves the portfolio to both primary and backup localStorage keys.
     savePortfolio: function (portfolio) {
       var payload = { savedAt: Date.now(), portfolio: portfolio };
       var okPrimary = write(KEYS.portfolio, payload);
       var okBackup = write(KEYS.portfolioBackup, payload);
       return okPrimary || okBackup;
     },
+    // Reads the demo-mode backup portfolio from localStorage.
     loadDemoPortfolioBackup: function () {
       var rec = normalizePortfolioRecord(read(KEYS.demoPortfolioBackup, null));
       return rec ? rec.portfolio : null;
     },
+    // Saves the demo-mode backup portfolio to localStorage.
     saveDemoPortfolioBackup: function (portfolio) {
       var payload = { savedAt: Date.now(), portfolio: portfolio };
       return write(KEYS.demoPortfolioBackup, payload);
     },
+    // Clears the demo-mode backup snapshot.
     clearDemoPortfolioBackup: function () {
       try {
         localStorage.removeItem(KEYS.demoPortfolioBackup);
@@ -115,6 +150,7 @@
         return false;
       }
     },
+    // Reads the newest local settings copy, preferring the freshest backup pair.
     loadSettings: function () {
       var primary = normalizeSettingsRecord(read(KEYS.settings, null));
       var backup = normalizeSettingsRecord(read(KEYS.settingsBackup, null));
@@ -125,28 +161,89 @@
       if (backup) return backup.settings;
       return null;
     },
+    // Saves settings to both primary and backup localStorage keys.
     saveSettings: function (settings) {
       var payload = { savedAt: Date.now(), settings: settings };
       var okPrimary = write(KEYS.settings, payload);
       var okBackup = write(KEYS.settingsBackup, payload);
       return okPrimary || okBackup;
     },
+    // Loads the best-effort browser cache payload.
     loadCache: function () {
       return read(KEYS.cache, {});
     },
+    // Persists the best-effort browser cache payload.
     saveCache: function (cache) {
       return write(KEYS.cache, cache);
     },
+    // Returns a cached entry only if it exists and is still fresh enough.
     getCached: function (cache, key, maxAgeMs) {
       var entry = cache && cache[key];
       if (!entry || !entry.ts) return null;
       if (maxAgeMs && Date.now() - entry.ts > maxAgeMs) return null;
       return entry.data;
     },
+    // Stores a cache entry with its current timestamp.
     setCached: function (cache, key, data) {
       if (!cache) return;
       cache[key] = { ts: Date.now(), data: data };
     },
+    // Fetches the shared portfolio from the local proxy.
+    loadRemotePortfolio: function () {
+      return fetchJson(apiBase() + '/api/portfolio', { cache: 'no-store' }).then(function (payload) {
+        var rec = normalizePortfolioRecord(payload && payload.portfolio ? payload.portfolio : payload);
+        return {
+          portfolio: rec ? rec.portfolio : null,
+          updatedAt: Math.max(0, Number(payload && payload.updatedAt || 0) || 0)
+        };
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Saves the shared portfolio to the local proxy in write order.
+    saveRemotePortfolio: function (portfolio, baseUpdatedAt) {
+      remoteSaveQueue = remoteSaveQueue.catch(function () {
+        return null;
+      }).then(function () {
+        return fetch(apiBase() + '/api/portfolio', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            portfolio: portfolio,
+            baseUpdatedAt: Math.max(0, Number(baseUpdatedAt || 0) || 0)
+          })
+        }).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (payload) {
+            if (response.ok) {
+              return {
+                ok: true,
+                updatedAt: Math.max(0, Number(payload && payload.updatedAt || 0) || 0)
+              };
+            }
+            if (response.status === 409) {
+              var rec = normalizePortfolioRecord(payload && payload.portfolio ? payload.portfolio : payload);
+              return {
+                ok: false,
+                conflict: true,
+                portfolio: rec ? rec.portfolio : null,
+                updatedAt: Math.max(0, Number(payload && payload.updatedAt || 0) || 0)
+              };
+            }
+            return {
+              ok: false,
+              conflict: false
+            };
+          });
+        }).catch(function () {
+          return {
+            ok: false,
+            conflict: false
+          };
+        });
+      });
+      return remoteSaveQueue;
+    },
+    // Exports a provided payload as a downloadable JSON file.
     exportPortfolioFile: function (payload) {
       var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       var url = URL.createObjectURL(blob);
@@ -156,6 +253,7 @@
       a.click();
       setTimeout(function () { URL.revokeObjectURL(url); }, 500);
     },
+    // Imports and parses a user-selected JSON portfolio file.
     importPortfolioFile: function (file) {
       return new Promise(function (resolve, reject) {
         var reader = new FileReader();

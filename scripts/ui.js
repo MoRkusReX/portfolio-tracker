@@ -1,3 +1,4 @@
+// Owns DOM lookups and pure UI rendering helpers for the portfolio interface.
 (function () {
   var PT = (window.PT = window.PT || {});
 
@@ -297,7 +298,7 @@
       var isProxy = !!cfg.useLocalProxy;
       this.el.connectionModeBadge.textContent = isProxy ? 'Local Proxy' : 'Direct';
       this.el.connectionModeBadge.title = isProxy
-        ? 'Using localhost proxy: ' + (cfg.proxyBase || 'http://localhost:3000')
+        ? 'Using proxy: ' + (cfg.proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin))
         : 'Using direct browser API requests';
     },
     renderPortfolio: function (ctx) {

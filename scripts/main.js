@@ -1,3 +1,4 @@
+// Coordinates boot, state hydration, data refresh flows, UI rendering, and user interactions.
 (function () {
   var PT = (window.PT = window.PT || {});
   var state = PT.State;
@@ -18,6 +19,8 @@
   var API_SOURCE_DRAG = null;
   var CRYPTO_PARTICLES = null;
   var INDICATOR_IN_FLIGHT = {};
+  var PORTFOLIO_REMOTE_REV = 0;
+  var PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = false;
   var AUTO_COLORS = ['#2cb6ff', '#14f1b2', '#f59e0b', '#fb7185', '#8b5cf6', '#22c55e', '#f97316', '#38bdf8', '#eab308', '#a78bfa'];
   var DEMO_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'AVGO', 'TSLA'];
   var DEMO_CRYPTO_IDS = ['bitcoin', 'ethereum', 'tether', 'ripple', 'binancecoin', 'solana', 'usd-coin', 'dogecoin', 'cardano', 'tron'];
@@ -569,18 +572,86 @@
     };
   }
 
+  // Restores local portfolio, settings, and cache state before the UI boots.
   function loadInitialState() {
     var savedPortfolio = storage.loadPortfolio();
     var savedSettings = storage.loadSettings();
     var savedCache = storage.loadCache();
 
     if (savedPortfolio && savedPortfolio.stocks && savedPortfolio.crypto) {
+      PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = true;
       state.portfolio = savedPortfolio;
     }
 
     applySavedSettings(savedSettings);
 
     state.caches = savedCache || {};
+  }
+
+  // Checks whether a portfolio contains at least one asset.
+  function hasPortfolioEntries(portfolio) {
+    return !!(portfolio && (
+      (Array.isArray(portfolio.stocks) && portfolio.stocks.length) ||
+      (Array.isArray(portfolio.crypto) && portfolio.crypto.length)
+    ));
+  }
+
+  function isPortfolioShape(portfolio) {
+    return !!(portfolio && Array.isArray(portfolio.stocks) && Array.isArray(portfolio.crypto));
+  }
+
+  // Swaps in the server-sourced portfolio and clears dependent derived state.
+  function replacePortfolioFromRemote(portfolio, updatedAt) {
+    if (!portfolio || !portfolio.stocks || !portfolio.crypto) return;
+    PORTFOLIO_REMOTE_REV = Math.max(PORTFOLIO_REMOTE_REV, Math.max(0, Number(updatedAt || 0) || 0));
+    state.portfolio = clone(portfolio);
+    state.market.stocks = {};
+    state.market.crypto = {};
+    state.history.stocks = {};
+    state.history.crypto = {};
+    state.news = {};
+    state.twitter = {};
+    state.events = {};
+    normalizeImportedAssets();
+    hydrateCachedData();
+    hydrateIndicatorsFromCache();
+    renderAll();
+  }
+
+  // Reconciles local and server portfolio state, preferring the shared server copy.
+  function syncPortfolioWithServer() {
+    if (!storage || typeof storage.loadRemotePortfolio !== 'function') return Promise.resolve(null);
+    var localPortfolio = clone(state.portfolio);
+    return storage.loadRemotePortfolio().then(function (remoteRecord) {
+      var remotePortfolio = remoteRecord && remoteRecord.portfolio ? remoteRecord.portfolio : null;
+      var remoteUpdatedAt = Math.max(0, Number(remoteRecord && remoteRecord.updatedAt || 0) || 0);
+      PORTFOLIO_REMOTE_REV = remoteUpdatedAt;
+      if (hasPortfolioEntries(remotePortfolio)) {
+        replacePortfolioFromRemote(remotePortfolio, remoteUpdatedAt);
+        return remoteRecord;
+      }
+      if (!PORTFOLIO_LOADED_FROM_LOCAL_STORAGE || !hasPortfolioEntries(localPortfolio) || typeof storage.saveRemotePortfolio !== 'function') return null;
+      return storage.saveRemotePortfolio(localPortfolio, remoteUpdatedAt).then(function (result) {
+        if (result && result.ok) {
+          PORTFOLIO_REMOTE_REV = Math.max(0, Number(result.updatedAt || 0) || 0);
+          return {
+            portfolio: localPortfolio,
+            updatedAt: PORTFOLIO_REMOTE_REV
+          };
+        }
+        if (result && result.conflict && isPortfolioShape(result.portfolio)) {
+          replacePortfolioFromRemote(result.portfolio, result.updatedAt);
+          setStatus('Portfolio updated on another device; reloaded latest server copy');
+          return {
+            portfolio: result.portfolio,
+            updatedAt: Math.max(0, Number(result.updatedAt || 0) || 0)
+          };
+        }
+        return null;
+      });
+    }).catch(function () {
+      return null;
+    });
   }
 
   function applySavedSettings(savedSettings) {
@@ -783,6 +854,7 @@
     storage.saveCache(state.caches);
   }
 
+  // Builds the serializable settings payload that is persisted between sessions.
   function buildSettingsPayload() {
     return {
       theme: state.app.theme,
@@ -808,6 +880,7 @@
     };
   }
 
+  // Persists settings, cache, and the shared portfolio to their respective stores.
   function persist() {
     var settingsPayload = buildSettingsPayload();
 
@@ -825,6 +898,20 @@
 
     // Cache is best-effort only.
     storage.saveCache(state.caches);
+    if (typeof storage.saveRemotePortfolio === 'function') {
+      storage.saveRemotePortfolio(state.portfolio, PORTFOLIO_REMOTE_REV).then(function (result) {
+        if (result && result.ok) {
+          PORTFOLIO_REMOTE_REV = Math.max(0, Number(result.updatedAt || 0) || 0);
+          return;
+        }
+        if (result && result.conflict) {
+          if (isPortfolioShape(result.portfolio)) {
+            replacePortfolioFromRemote(result.portfolio, result.updatedAt);
+          }
+          setStatus('Portfolio save blocked by a newer server version; reloaded latest shared copy');
+        }
+      });
+    }
   }
 
   function getRawModeItems(mode) {
@@ -1492,7 +1579,7 @@
       function fetchCoinMarketCapProxy() {
         var symbol = String(item.symbol || '').trim().toUpperCase();
         if (!symbol) return Promise.reject(new Error('missing-symbol'));
-        var proxyBase = String(cfg.proxyBase || 'http://localhost:3000').replace(/\/$/, '');
+        var proxyBase = String(cfg.proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin)).replace(/\/$/, '');
         var url = proxyBase + '/api/cmc/quote/' + encodeURIComponent(symbol);
         return fetch(url, { cache: 'no-store' }).then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -2647,6 +2734,7 @@
     });
   }
 
+  // Bootstraps modules, restores persisted state, and starts timers and initial refreshes.
   function boot() {
     ui = PT.UI;
     storage = PT.Storage;
@@ -2674,6 +2762,7 @@
     });
 
     renderAll();
+    syncPortfolioWithServer();
     if (state.app.mode === 'stocks' && state.app.newsScopeStocks === 'general' && !state.news['stocks:general']) {
       refreshGeneralStocksNews();
     }

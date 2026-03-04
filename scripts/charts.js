@@ -1,3 +1,4 @@
+// Wraps Chart.js creation and update logic for allocation and history charts.
 (function () {
   var PT = (window.PT = window.PT || {});
 
