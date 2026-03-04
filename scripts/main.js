@@ -17,9 +17,31 @@
   var CRYPTO_AUTO_REFRESH_TIMER = null;
   var API_SOURCE_DRAG = null;
   var CRYPTO_PARTICLES = null;
+  var INDICATOR_IN_FLIGHT = {};
   var AUTO_COLORS = ['#2cb6ff', '#14f1b2', '#f59e0b', '#fb7185', '#8b5cf6', '#22c55e', '#f97316', '#38bdf8', '#eab308', '#a78bfa'];
   var DEMO_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'AVGO', 'TSLA'];
   var DEMO_CRYPTO_IDS = ['bitcoin', 'ethereum', 'tether', 'ripple', 'binancecoin', 'solana', 'usd-coin', 'dogecoin', 'cardano', 'tron'];
+  var INDICATOR_TARGETS = {
+    stocks: {
+      mode: 'stocks',
+      assetType: 'stock',
+      cacheKey: 'stocks',
+      label: 'TSLA',
+      symbol: 'TSLA'
+    },
+    crypto: {
+      mode: 'crypto',
+      assetType: 'crypto',
+      cacheKey: 'crypto',
+      label: 'BTC/USD',
+      symbol: 'BTC/USD'
+    }
+  };
+  var INDICATOR_TIMEFRAMES = {
+    '1d': { label: '1D', interval: '1day', warmup: 300, incremental: 12, maxCandles: 360, bucket: 'day' },
+    '1w': { label: '1W', interval: '1week', warmup: 260, incremental: 8, maxCandles: 300, bucket: 'week' },
+    '1m': { label: '1M', interval: '1month', warmup: 120, incremental: 5, maxCandles: 160, bucket: 'month' }
+  };
 
   function id() {
     return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -179,6 +201,249 @@
 
   PT.openApiSourcesModal = openApiSourcesModal;
   PT.closeApiSourcesModal = closeApiSourcesModal;
+
+  function indicatorCandleCacheKey(modeKey, timeframeKey) {
+    return 'indicators:candles:' + modeKey + ':' + timeframeKey;
+  }
+
+  function indicatorComputedCacheKey(modeKey, timeframeKey) {
+    return 'indicators:computed:' + modeKey + ':' + timeframeKey;
+  }
+
+  function indicatorModeConfig(mode) {
+    return INDICATOR_TARGETS[mode === 'crypto' ? 'crypto' : 'stocks'];
+  }
+
+  function indicatorSourceEnabled(assetType) {
+    return !!(window.PT && window.PT.ApiSources && typeof window.PT.ApiSources.getOrdered === 'function' &&
+      window.PT.ApiSources.getOrdered('indicators', assetType, state.app.apiSourcePrefs).length);
+  }
+
+  function getIsoWeekKey(ts) {
+    var date = new Date(ts);
+    if (!isFinite(date.getTime())) return '';
+    var utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    var day = utc.getUTCDay() || 7;
+    utc.setUTCDate(utc.getUTCDate() + 4 - day);
+    var yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+    var week = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+    return utc.getUTCFullYear() + '-W' + String(week).padStart(2, '0');
+  }
+
+  function indicatorBucketKey(bucketType, ts) {
+    var date = new Date(ts);
+    if (!isFinite(date.getTime())) return '';
+    if (bucketType === 'week') return getIsoWeekKey(ts);
+    if (bucketType === 'month') return date.getUTCFullYear() + '-' + String(date.getUTCMonth() + 1).padStart(2, '0');
+    return date.getUTCFullYear() + '-' + String(date.getUTCMonth() + 1).padStart(2, '0') + '-' + String(date.getUTCDate()).padStart(2, '0');
+  }
+
+  function trimIndicatorCandles(candles, maxCandles) {
+    var list = Array.isArray(candles) ? candles.slice() : [];
+    if (list.length <= maxCandles) return list;
+    return list.slice(list.length - maxCandles);
+  }
+
+  function mergeIndicatorCandles(existing, incoming, maxCandles) {
+    var merged = {};
+    (Array.isArray(existing) ? existing : []).concat(Array.isArray(incoming) ? incoming : []).forEach(function (row) {
+      if (!row || !row.t) return;
+      merged[row.t] = row;
+    });
+    return trimIndicatorCandles(Object.keys(merged).sort().map(function (key) {
+      return merged[key];
+    }), maxCandles);
+  }
+
+  function computeIndicatorSnapshot(candles, timeframeKey) {
+    if (!(window.PT && window.PT.IndicatorEngine && typeof window.PT.IndicatorEngine.analyze === 'function')) {
+      throw new Error('Indicator engine unavailable');
+    }
+    return window.PT.IndicatorEngine.analyze(candles, { timeKey: timeframeKey });
+  }
+
+  function buildIndicatorPanelMeta(modeKey, options) {
+    var opts = options || {};
+    if (opts.disabled) {
+      return 'Indicator source disabled in API Sources.';
+    }
+    if (opts.error && opts.usedCache) {
+      return 'Using cached indicator data. ' + opts.error;
+    }
+    if (opts.error) {
+      return opts.error;
+    }
+    if (opts.usedCache) {
+      return 'Using cached indicator data.';
+    }
+    if (opts.lastFetchedAt) {
+      return 'Twelve Data • Updated ' + new Date(opts.lastFetchedAt).toLocaleString();
+    }
+    return modeKey === 'crypto'
+      ? 'Refresh Prices to load BTC/USD indicator snapshots.'
+      : 'Refresh Prices to load TSLA indicator snapshots.';
+  }
+
+  function rebuildIndicatorPanelState(modeKey, metaOptions) {
+    var config = indicatorModeConfig(modeKey);
+    var timeframes = {};
+    var usedCache = false;
+    var lastFetchedAt = 0;
+    ['1d', '1w', '1m'].forEach(function (timeframeKey) {
+      var candlePayload = getCachedAny(indicatorCandleCacheKey(config.cacheKey, timeframeKey));
+      var computedPayload = getCachedAny(indicatorComputedCacheKey(config.cacheKey, timeframeKey));
+      if (!candlePayload || !Array.isArray(candlePayload.candles) || !candlePayload.candles.length) return;
+      usedCache = true;
+      lastFetchedAt = Math.max(lastFetchedAt, Number(candlePayload.lastFetchedAt || 0) || 0);
+      if (!computedPayload || computedPayload.latestCandleTime !== candlePayload.latestCandleTime) {
+        try {
+          computedPayload = computeIndicatorSnapshot(candlePayload.candles, timeframeKey);
+          storage.setCached(state.caches, indicatorComputedCacheKey(config.cacheKey, timeframeKey), computedPayload);
+          storage.saveCache(state.caches);
+        } catch (err) {
+          computedPayload = null;
+        }
+      }
+      if (computedPayload) timeframes[timeframeKey] = computedPayload;
+    });
+    var summary = window.PT && window.PT.IndicatorEngine && typeof window.PT.IndicatorEngine.summarizeByTimeframe === 'function'
+      ? window.PT.IndicatorEngine.summarizeByTimeframe(timeframes)
+      : { overall: 'Neutral', weightedScore: 0 };
+    state.indicators[config.cacheKey] = {
+      mode: config.mode,
+      assetLabel: config.label,
+      overallStatus: summary.overall || 'Neutral',
+      weightedScore: summary.weightedScore || 0,
+      timeframes: timeframes,
+      metaText: buildIndicatorPanelMeta(config.cacheKey, {
+        disabled: metaOptions && metaOptions.disabled,
+        error: metaOptions && metaOptions.error,
+        usedCache: metaOptions && Object.prototype.hasOwnProperty.call(metaOptions, 'usedCache') ? metaOptions.usedCache : usedCache,
+        lastFetchedAt: metaOptions && Object.prototype.hasOwnProperty.call(metaOptions, 'lastFetchedAt') ? metaOptions.lastFetchedAt : lastFetchedAt
+      })
+    };
+    return state.indicators[config.cacheKey];
+  }
+
+  function hydrateIndicatorsFromCache() {
+    rebuildIndicatorPanelState('stocks', {});
+    rebuildIndicatorPanelState('crypto', {});
+  }
+
+  function isIndicatorTimeframeFresh(timeframeKey, payload) {
+    var tf = INDICATOR_TIMEFRAMES[timeframeKey];
+    if (!tf || !payload || !isFinite(Number(payload.lastFetchedAt))) return false;
+    return indicatorBucketKey(tf.bucket, payload.lastFetchedAt) === indicatorBucketKey(tf.bucket, Date.now());
+  }
+
+  function updateIndicatorTimeframe(modeKey, timeframeKey) {
+    var config = indicatorModeConfig(modeKey);
+    var timeframe = INDICATOR_TIMEFRAMES[timeframeKey];
+    if (!config || !timeframe) return Promise.resolve(null);
+    var inflightKey = config.cacheKey + ':' + timeframeKey;
+    var candleKey = indicatorCandleCacheKey(config.cacheKey, timeframeKey);
+    var computedKey = indicatorComputedCacheKey(config.cacheKey, timeframeKey);
+    var existing = getCachedAny(candleKey);
+
+    if (existing && Array.isArray(existing.candles) && existing.candles.length && isIndicatorTimeframeFresh(timeframeKey, existing)) {
+      var cachedComputed = getCachedAny(computedKey);
+      if (!cachedComputed || cachedComputed.latestCandleTime !== existing.latestCandleTime) {
+        cachedComputed = computeIndicatorSnapshot(existing.candles, timeframeKey);
+        storage.setCached(state.caches, computedKey, cachedComputed);
+        storage.saveCache(state.caches);
+      }
+      return Promise.resolve({
+        snapshot: cachedComputed,
+        lastFetchedAt: Number(existing.lastFetchedAt || 0) || 0,
+        fromCache: true
+      });
+    }
+
+    if (INDICATOR_IN_FLIGHT[inflightKey]) return INDICATOR_IN_FLIGHT[inflightKey];
+
+    var outputsize = existing && Array.isArray(existing.candles) && existing.candles.length
+      ? timeframe.incremental
+      : timeframe.warmup;
+
+    if (!PT.IndicatorAPI || typeof PT.IndicatorAPI.getTimeSeries !== 'function') {
+      return Promise.reject(new Error('Indicator API unavailable'));
+    }
+
+    INDICATOR_IN_FLIGHT[inflightKey] = PT.IndicatorAPI.getTimeSeries(config.symbol, timeframe.interval, outputsize).then(function (response) {
+      var merged = mergeIndicatorCandles(existing && existing.candles, response.values, timeframe.maxCandles);
+      var newestTime = merged.length ? merged[merged.length - 1].t : null;
+      var payload = {
+        symbol: config.symbol,
+        timeframe: timeframeKey,
+        candles: merged,
+        latestCandleTime: newestTime,
+        lastFetchedAt: Date.now()
+      };
+      var snapshot = computeIndicatorSnapshot(merged, timeframeKey);
+      storage.setCached(state.caches, candleKey, payload);
+      storage.setCached(state.caches, computedKey, snapshot);
+      storage.saveCache(state.caches);
+      return {
+        snapshot: snapshot,
+        lastFetchedAt: payload.lastFetchedAt,
+        fromCache: false
+      };
+    }).finally(function () {
+      delete INDICATOR_IN_FLIGHT[inflightKey];
+    });
+
+    return INDICATOR_IN_FLIGHT[inflightKey];
+  }
+
+  function refreshIndicatorsForMode(modeKey) {
+    var config = indicatorModeConfig(modeKey);
+    if (!config) return Promise.resolve({ ok: false, error: 'Indicators unavailable' });
+    if (!indicatorSourceEnabled(config.assetType)) {
+      var disabledState = rebuildIndicatorPanelState(config.cacheKey, { disabled: true, usedCache: true });
+      return Promise.resolve({ ok: false, disabled: true, state: disabledState });
+    }
+    var keys = Object.keys(INDICATOR_TIMEFRAMES);
+    return Promise.allSettled(keys.map(function (timeframeKey) {
+      return updateIndicatorTimeframe(config.cacheKey, timeframeKey);
+    })).then(function (results) {
+      var anyFresh = false;
+      var anyCache = false;
+      var errorText = '';
+      var lastFetchedAt = 0;
+      results.forEach(function (result) {
+        if (result.status === 'fulfilled' && result.value) {
+          anyFresh = anyFresh || !result.value.fromCache;
+          anyCache = anyCache || !!result.value.fromCache;
+          lastFetchedAt = Math.max(lastFetchedAt, Number(result.value.lastFetchedAt || 0) || 0);
+          return;
+        }
+        if (!errorText) {
+          errorText = (result.reason && result.reason.message) || 'Indicator request failed';
+        }
+      });
+      rebuildIndicatorPanelState(config.cacheKey, {
+        error: errorText,
+        usedCache: !anyFresh || anyCache,
+        lastFetchedAt: lastFetchedAt
+      });
+      return {
+        ok: !errorText,
+        partial: !!errorText,
+        usedCache: !anyFresh || anyCache,
+        error: errorText
+      };
+    }).catch(function (err) {
+      rebuildIndicatorPanelState(config.cacheKey, {
+        error: (err && err.message) || 'Indicator refresh failed',
+        usedCache: true
+      });
+      return {
+        ok: false,
+        error: (err && err.message) || 'Indicator refresh failed',
+        usedCache: true
+      };
+    });
+  }
 
   function moveApiSource(categoryId, sourceId, targetIndex) {
     var list = state.app.apiSourcePrefs && state.app.apiSourcePrefs[categoryId];
@@ -717,6 +982,15 @@
     ui.renderTotals(getModeTotals(items), !!state.app.hideHoldings);
     renderAllocation(items);
     renderDetails();
+    ui.renderIndicatorsPanel(state.indicators[state.app.mode === 'crypto' ? 'crypto' : 'stocks'] || {
+      mode: state.app.mode,
+      assetLabel: state.app.mode === 'crypto' ? 'BTC/USD' : 'TSLA',
+      overallStatus: 'Neutral',
+      metaText: state.app.mode === 'crypto'
+        ? 'Refresh Prices to load BTC/USD indicator snapshots.'
+        : 'Refresh Prices to load TSLA indicator snapshots.',
+      timeframes: {}
+    });
     renderBtcDominancePanel();
     syncCryptoParticles();
     persist();
@@ -1691,11 +1965,14 @@
         prevCloseHint: getStockPrevCloseHint(asset),
         skipPrevCloseNetwork: true
       });
-    })).then(function (results) {
+    }).concat([
+      refreshIndicatorsForMode('stocks')
+    ])).then(function (results) {
       var updated = 0;
       var cachedOnly = 0;
+      var indicatorMeta = results[results.length - 1];
 
-      results.forEach(function (res, idx) {
+      results.slice(0, assets.length).forEach(function (res, idx) {
         var asset = assets[idx];
         if (res.status === 'fulfilled' && res.value) {
           var quote = res.value;
@@ -1712,16 +1989,17 @@
       renderAll();
       var failed = assets.length - updated;
       var nowText = new Date().toLocaleTimeString();
+      var indicatorsFailed = indicatorMeta && (indicatorMeta.status !== 'fulfilled' || (indicatorMeta.value && indicatorMeta.value.ok === false && !indicatorMeta.value.disabled));
       if (updated <= 0 && cachedOnly > 0) {
         setStatus('Stocks quotes unavailable, using cached values • ' + nowText);
       } else if (updated <= 0) {
         setStatus('Stocks quote refresh failed • ' + nowText);
-      } else if (failed > 0) {
+      } else if (failed > 0 || indicatorsFailed) {
         setStatus('Stocks quotes partial refresh • ' + nowText);
       } else {
         setStatus('Stocks quotes refreshed • ' + nowText);
       }
-      return { updated: updated, meta: { failed: failed, staleUsed: cachedOnly } };
+      return { updated: updated, meta: { failed: failed, staleUsed: cachedOnly, indicatorsFailed: indicatorsFailed } };
     });
   }
 
@@ -1857,7 +2135,8 @@
       var selectedCrypto = getSelectedAsset('crypto');
       var jobsCrypto = [
         refreshCryptoQuotesBatch(rawItems, { force: true }),
-        refreshCryptoGlobalMetrics().then(function () { return { ok: true }; }).catch(function () { return { ok: false }; })
+        refreshCryptoGlobalMetrics().then(function () { return { ok: true }; }).catch(function () { return { ok: false }; }),
+        refreshIndicatorsForMode('crypto')
       ];
       if (selectedCrypto) {
         jobsCrypto.push(
@@ -1874,7 +2153,8 @@
       return Promise.allSettled(jobsCrypto).then(function (results) {
         var quoteMeta = results[0] && results[0].status === 'fulfilled' ? results[0].value : { updated: 0, failed: rawItems.length, staleUsed: 0 };
         var globalOk = results[1] && results[1].status === 'fulfilled' && results[1].value && results[1].value.ok;
-        var detail = selectedCrypto && results[2] && results[2].status === 'fulfilled' ? results[2].value : null;
+        var indicatorOk = results[2] && results[2].status === 'fulfilled' && results[2].value && (results[2].value.ok || results[2].value.disabled);
+        var detail = selectedCrypto && results[3] && results[3].status === 'fulfilled' ? results[3].value : null;
         renderAll();
         var nowText = new Date().toLocaleTimeString();
         var detailFailed = detail ? (!detail.historyOk || !detail.newsOk || !detail.eventsOk) : false;
@@ -1882,7 +2162,7 @@
           setStatus('Crypto quotes unavailable, using cached values • ' + nowText);
         } else if (quoteMeta.updated <= 0) {
           setStatus('Crypto refresh failed (quotes not updated) • ' + nowText);
-        } else if (quoteMeta.failed > 0 || !globalOk || detailFailed) {
+        } else if (quoteMeta.failed > 0 || !globalOk || !indicatorOk || detailFailed) {
           setStatus('Crypto partial refresh (some requests failed) • ' + nowText);
         } else {
           setStatus('Crypto refresh complete • ' + nowText);
@@ -2382,6 +2662,7 @@
     loadInitialState();
     normalizeImportedAssets();
     hydrateCachedData();
+    hydrateIndicatorsFromCache();
     bindEvents();
 
     if (!location.hash) {

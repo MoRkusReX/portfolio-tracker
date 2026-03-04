@@ -360,6 +360,67 @@ app.get('/api/stocks/quotes', async (req, res) => {
   }
 });
 
+// GET /api/twelvedata/time-series?symbol=TSLA&interval=1day&outputsize=300
+// Proxies Twelve Data time_series for the Indicators panel using the server-side API key.
+app.get('/api/twelvedata/time-series', async (req, res) => {
+  try {
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    const interval = String(req.query.interval || '').trim().toLowerCase();
+    const outputsize = Math.max(1, Math.min(5000, Number(req.query.outputsize || 300) || 300));
+
+    if (!symbol) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    if (!['1day', '1week', '1month'].includes(interval)) {
+      return res.status(400).json({ error: 'invalid_interval' });
+    }
+    if (!TWELVEDATA_API_KEY) {
+      return res.status(500).json({ error: 'twelvedata_key_missing' });
+    }
+
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&outputsize=${encodeURIComponent(outputsize)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
+      validateStatus: () => true
+    });
+
+    if (response.status !== 200) {
+      const detail = typeof response.data === 'string'
+        ? response.data
+        : JSON.stringify(response.data || {});
+      return res.status(response.status || 500).json({
+        error: response.status === 429 ? 'twelvedata_rate_limited' : 'twelvedata_failed',
+        status: response.status || 500,
+        detail: String(detail || 'Twelve Data time_series failed').slice(0, 240)
+      });
+    }
+
+    const data = response.data || {};
+    if (!data || data.status === 'error' || !Array.isArray(data.values)) {
+      return res.status(/limit|quota|too many/i.test(String(data && data.message || '')) ? 429 : 500).json({
+        error: /limit|quota|too many/i.test(String(data && data.message || '')) ? 'twelvedata_rate_limited' : 'twelvedata_failed',
+        detail: String((data && (data.message || data.code)) || 'No time series values returned').slice(0, 240),
+        upstream: data
+      });
+    }
+
+    return res.json({
+      meta: data.meta || {},
+      values: data.values,
+      status: data.status || 'ok',
+      source: 'twelvedata',
+      fetchedAt: Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'twelvedata_failed',
+      status: err && err.response ? err.response.status : 500,
+      detail: String((err && err.message) || 'Twelve Data time_series proxy failed').slice(0, 240)
+    });
+  }
+});
+
 // GET /api/search?q=AAPL
 // Proxies Yahoo Finance autocomplete (unofficial) and returns JSON.
 app.get('/api/search', async (req, res) => {

@@ -218,6 +218,23 @@
           </div>
         </section>
       </aside>
+
+      <aside class="indicators-panel glass" id="indicatorsPanel">
+        <div class="section-header">
+          <div>
+            <h3>Indicators</h3>
+            <div id="indicatorsAssetLabel" class="muted">TSLA</div>
+          </div>
+        </div>
+        <section class="panel-block panel-block--indicators">
+          <div class="panel-block__head">
+            <h4>Overall (All Timeframes)</h4>
+            <span id="indicatorsOverallPill" class="indicator-pill indicator-pill--neutral">Neutral</span>
+          </div>
+          <div id="indicatorsMeta" class="muted indicator-meta">Refresh Prices to load indicator snapshots.</div>
+        </section>
+        <div id="indicatorsTimeframes" class="indicators-timeframes"></div>
+      </aside>
     </main>
   </div>
 
@@ -397,6 +414,8 @@
   <script src="scripts/api/news.js"></script>
   <script src="scripts/api/stocktwits.js"></script>
   <script src="scripts/api/events.js"></script>
+  <script src="scripts/indicator-engine.js"></script>
+  <script src="scripts/api/indicators.js"></script>
   <script src="scripts/particles.js"></script>
   <script src="scripts/charts.js"></script>
   <script src="scripts/ui.js"></script>

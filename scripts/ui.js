@@ -128,6 +128,11 @@
         apiSourcesModal: qs('apiSourcesModal'),
         apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
         apiSourcesContent: qs('apiSourcesContent'),
+        indicatorsPanel: qs('indicatorsPanel'),
+        indicatorsAssetLabel: qs('indicatorsAssetLabel'),
+        indicatorsOverallPill: qs('indicatorsOverallPill'),
+        indicatorsMeta: qs('indicatorsMeta'),
+        indicatorsTimeframes: qs('indicatorsTimeframes'),
         assetTypeInput: qs('assetTypeInput'),
         assetSearchInput: qs('assetSearchInput'),
         assetSelectedId: qs('assetSelectedId'),
@@ -599,6 +604,67 @@
       if (this.el.btcDominanceBarLabel) this.el.btcDominanceBarLabel.textContent = btc.toFixed(2) + '%';
       if (this.el.ethDominanceBarLabel) this.el.ethDominanceBarLabel.textContent = eth.toFixed(2) + '%';
       if (this.el.othersDominanceBarLabel) this.el.othersDominanceBarLabel.textContent = others.toFixed(2) + '%';
+    },
+    renderIndicatorsPanel: function (config) {
+      if (!this.el.indicatorsTimeframes || !this.el.indicatorsMeta || !this.el.indicatorsOverallPill) return;
+      var mode = config && config.mode === 'crypto' ? 'crypto' : 'stocks';
+      var assetLabel = (config && config.assetLabel) || (mode === 'crypto' ? 'BTC/USD' : 'TSLA');
+      var overall = (config && config.overallStatus) || 'Neutral';
+      var metaText = (config && config.metaText) || 'Refresh Prices to load indicator snapshots.';
+      var timeframes = (config && config.timeframes) || {};
+      var hasRows = false;
+
+      function pillClass(status) {
+        var normalized = String(status || 'Neutral').toLowerCase();
+        if (normalized === 'bullish') return 'indicator-pill indicator-pill--bullish';
+        if (normalized === 'bearish') return 'indicator-pill indicator-pill--bearish';
+        return 'indicator-pill indicator-pill--neutral';
+      }
+
+      function fmtIndicator(value) {
+        var numValue = Number(value);
+        if (!isFinite(numValue)) return 'n/a';
+        var abs = Math.abs(numValue);
+        var digits = abs >= 1000 ? 2 : (abs >= 100 ? 2 : (abs >= 1 ? 3 : 4));
+        return numValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits });
+      }
+
+      function row(label, primary, secondary, status) {
+        return '<div class="indicator-row">' +
+          '<div class="indicator-row__label">' + esc(label) + '</div>' +
+          '<div class="indicator-row__value"><strong>' + esc(primary) + '</strong>' + (secondary ? '<small>' + esc(secondary) + '</small>' : '') + '</div>' +
+          '<span class="' + pillClass(status) + '">' + esc(status || 'Neutral') + '</span>' +
+        '</div>';
+      }
+
+      if (this.el.indicatorsAssetLabel) {
+        this.el.indicatorsAssetLabel.textContent = assetLabel;
+      }
+      this.el.indicatorsMeta.textContent = metaText;
+      this.el.indicatorsOverallPill.className = pillClass(overall);
+      this.el.indicatorsOverallPill.textContent = overall;
+
+      this.el.indicatorsTimeframes.innerHTML = ['1d', '1w', '1m'].map(function (key) {
+        var tf = timeframes[key];
+        if (!tf) return '';
+        hasRows = true;
+        var values = tf.values || {};
+        var statuses = tf.statuses || {};
+        return '<section class="indicator-card">' +
+          '<div class="indicator-card__head"><h4>' + esc(String(key).toUpperCase()) + '</h4><span class="' + pillClass(tf.overall) + '">' + esc(tf.overall || 'Neutral') + '</span></div>' +
+          '<div class="indicator-card__rows">' +
+            row('EMA Trend', 'EMA20 ' + fmtIndicator(values.ema20) + ' | EMA50 ' + fmtIndicator(values.ema50), 'Close ' + fmtIndicator(tf.close), statuses.ema) +
+            row('RSI 14', fmtIndicator(values.rsi14), 'Wilder smoothing', statuses.rsi) +
+            row('MACD', 'Line ' + fmtIndicator(values.macdLine) + ' | Signal ' + fmtIndicator(values.macdSignal), 'Hist ' + fmtIndicator(values.macdHistogram), statuses.macd) +
+            row('Bollinger', 'Mid ' + fmtIndicator(values.bbMiddle) + ' | Up ' + fmtIndicator(values.bbUpper), 'Low ' + fmtIndicator(values.bbLower) + ' | ' + String(values.bollingerPosition || 'n/a'), statuses.bollinger) +
+          '</div>' +
+          '<div class="indicator-note">Score: ' + esc(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
+        '</section>';
+      }).join('');
+
+      if (!hasRows) {
+        this.el.indicatorsTimeframes.innerHTML = '<section class="indicator-card"><div class="muted">No indicator snapshot yet. Use Refresh Prices.</div></section>';
+      }
     },
     openModal: function (config) {
       this.el.modal.classList.remove('hidden');

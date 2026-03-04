@@ -56,7 +56,7 @@
         { id: 'stooq', label: 'Stooq', assetTypes: ['stock'], enabled: true },
         { id: 'yahoo', label: 'Yahoo', assetTypes: ['stock'], enabled: true },
         { id: 'coingecko', label: 'CoinGecko', assetTypes: ['crypto'], enabled: true },
-        { id: 'twelvedata', label: 'TwelveData', assetTypes: ['stock'], enabled: false, requiresKey: true }
+        { id: 'twelvedata', label: 'Twelve Data', assetTypes: ['stock'], enabled: false, requiresKey: true }
       ]
     },
     {
@@ -77,6 +77,14 @@
         { id: 'yahoo', label: 'Yahoo', assetTypes: ['stock', 'crypto'], enabled: true },
         { id: 'tickertick', label: 'TickerTick', assetTypes: ['stock', 'crypto'], enabled: true },
         { id: 'cryptopanic', label: 'CryptoPanic', assetTypes: ['crypto'], enabled: true }
+      ]
+    },
+    {
+      id: 'indicators',
+      label: 'Indicators',
+      note: 'TSLA and BTC/USD indicator candles and signal calculations',
+      sources: [
+        { id: 'twelvedata', label: 'Twelve Data', assetTypes: ['stock', 'crypto'], enabled: true, requiresKey: true }
       ]
     },
     {
@@ -208,6 +216,10 @@
     news: {},
     twitter: {},
     events: {},
+    indicators: {
+      stocks: null,
+      crypto: null
+    },
     caches: {},
     symbols: {
       stocks: STOCK_SYMBOLS,
