@@ -130,6 +130,34 @@
         });
       });
     },
+    getIntraday: function (asset, hours) {
+      if (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function' && !PT.ApiSources.getOrdered('chart', 'crypto').length) {
+        return Promise.reject(new Error('No enabled crypto chart source'));
+      }
+      var id = asset.coinId || asset.id || String(asset).toLowerCase();
+      var safeHours = Math.max(1, Math.min(96, Number(hours || 4) || 4));
+      var days = Math.max(1, Math.ceil(safeHours / 24) + 1);
+      var url = 'https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(id) +
+        '/market_chart?vs_currency=usd&days=' + encodeURIComponent(days) + '&interval=hourly';
+      return fetchJson(url, 'CryptoAPI.getIntraday').then(function (data) {
+        var prices = Array.isArray(data && data.prices) ? data.prices : [];
+        if (!prices.length) throw new Error('No crypto intraday data');
+        var rows = prices.map(function (row) {
+          var ts = Number(row && row[0]);
+          var close = Number(row && row[1]);
+          if (!isFinite(ts) || !isFinite(close)) return null;
+          return {
+            ts: ts,
+            t: new Date(ts).toISOString().slice(0, 16).replace('T', ' '),
+            c: close
+          };
+        }).filter(Boolean);
+        if (!rows.length) throw new Error('No parsed crypto intraday rows');
+        var cutoff = Date.now() - (safeHours * 60 * 60 * 1000);
+        var filtered = rows.filter(function (row) { return Number(row.ts) >= cutoff; });
+        return (filtered.length ? filtered : rows).slice(-(safeHours + 6));
+      });
+    },
     getGlobalMetrics: function () {
       var url = 'https://api.coingecko.com/api/v3/global';
       return fetchJson(url, 'CryptoAPI.getGlobalMetrics').then(function (data) {

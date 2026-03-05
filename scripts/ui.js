@@ -9,6 +9,56 @@
     return Number(n).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
   }
 
+  function fmtCompactNumber(n) {
+    var value = Number(n);
+    if (!isFinite(value)) return 'n/a';
+    var abs = Math.abs(value);
+    var suffix = '';
+    var divisor = 1;
+    if (abs >= 1e12) {
+      suffix = 'T';
+      divisor = 1e12;
+    } else if (abs >= 1e9) {
+      suffix = 'B';
+      divisor = 1e9;
+    } else if (abs >= 1e6) {
+      suffix = 'M';
+      divisor = 1e6;
+    } else {
+      return value.toLocaleString();
+    }
+    var scaled = value / divisor;
+    var rounded = Math.abs(scaled) >= 100 ? scaled.toFixed(0) : (Math.abs(scaled) >= 10 ? scaled.toFixed(1) : scaled.toFixed(2));
+    return String(rounded).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1') + suffix;
+  }
+
+  function fmtCompactCurrency(n) {
+    var text = fmtCompactNumber(n);
+    if (text === 'n/a') return text;
+    return '$' + text;
+  }
+
+  function fmtAssetUnitPrice(n, assetType) {
+    if (assetType !== 'crypto') return fmtCurrency(n);
+    var value = Number(n);
+    if (!isFinite(value)) return '$0.00';
+    var abs = Math.abs(value);
+    var maxFrac = 2;
+    if (abs > 0 && abs < 1) {
+      if (abs >= 0.1) maxFrac = 4;
+      else if (abs >= 0.01) maxFrac = 5;
+      else if (abs >= 0.001) maxFrac = 6;
+      else if (abs >= 0.0001) maxFrac = 7;
+      else maxFrac = 8;
+    }
+    return value.toLocaleString(undefined, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: maxFrac
+    });
+  }
+
   function fmtNumber(n) {
     if (!isFinite(Number(n))) return '0';
     return Number(n).toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -51,7 +101,8 @@
       eyeOff: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 4.5 21 19.5M10.6 6.2A10.4 10.4 0 0 1 12 6c6 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.3 3.8M6.3 9A17 17 0 0 0 2.5 12s3.5 6 9.5 6a10 10 0 0 0 3-.4M10 12a2 2 0 0 0 3 1.7 2.1 2.1 0 0 0 .5-2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       moon: '<svg viewBox="0 0 24 24" focusable="false"><path d="M14.5 3.5a8 8 0 1 0 6 13.5A9 9 0 1 1 14.5 3.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
       sun: '<svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
-      bug: '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 8.5c2.7 0 4.8 2 4.8 4.6v2.2c0 2.7-2.1 4.9-4.8 4.9s-4.8-2.2-4.8-4.9v-2.2c0-2.6 2.1-4.6 4.8-4.6Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.6 8.3V6.9a2.4 2.4 0 1 1 4.8 0v1.4M4.8 10.1h2.4M16.8 10.1h2.4M5.5 15h2M16.5 15h2M8.6 5.4 7.2 4M15.4 5.4 16.8 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      bug: '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 8.5c2.7 0 4.8 2 4.8 4.6v2.2c0 2.7-2.1 4.9-4.8 4.9s-4.8-2.2-4.8-4.9v-2.2c0-2.6 2.1-4.6 4.8-4.6Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.6 8.3V6.9a2.4 2.4 0 1 1 4.8 0v1.4M4.8 10.1h2.4M16.8 10.1h2.4M5.5 15h2M16.5 15h2M8.6 5.4 7.2 4M15.4 5.4 16.8 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      demo: '<svg viewBox="0 0 24 24" focusable="false"><path d="M9 3h6M10 3v3.2l-4.2 6.5a5 5 0 0 0 4.2 7.8h4a5 5 0 0 0 4.2-7.8L14 6.2V3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.6 14h6.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
     };
     return '<span class="btn__icon" aria-hidden="true">' + (icons[name] || '') + '</span>';
   }
@@ -99,6 +150,7 @@
         detailTitle: qs('detailTitle'),
         detailPriceBadge: qs('detailPriceBadge'),
         detailMeta: qs('detailMeta'),
+        detailChartTimeframes: qs('detailChartTimeframes'),
         externalLink: qs('externalLink'),
         marketDataGrid: qs('marketDataGrid'),
         btcDominancePanel: qs('btcDominancePanel'),
@@ -156,6 +208,7 @@
         indicatorExplorerSearchList: qs('indicatorExplorerSearchList'),
         indicatorExplorerChartTitle: qs('indicatorExplorerChartTitle'),
         indicatorExplorerChartMeta: qs('indicatorExplorerChartMeta'),
+        indicatorExplorerChartTimeframes: qs('indicatorExplorerChartTimeframes'),
         indicatorExplorerChart: qs('indicatorExplorerChart'),
         indicatorExplorerChartFallback: qs('indicatorExplorerChartFallback'),
         indicatorExplorerAssetLabel: qs('indicatorExplorerAssetLabel'),
@@ -250,14 +303,13 @@
     },
     setDemoModeToggle: function (enabled) {
       if (!this.el.demoModeToggle) return;
-      this.el.demoModeToggle.innerHTML = enabled
-        ? '<span aria-hidden="true">●</span> Demo On'
-        : '<span aria-hidden="true">○</span> Demo Off';
+      this.el.demoModeToggle.innerHTML = iconMarkup('demo');
       this.el.demoModeToggle.classList.toggle('btn--primary', !!enabled);
       this.el.demoModeToggle.classList.toggle('btn--ghost', !enabled);
       this.el.demoModeToggle.title = enabled
         ? 'Demo portfolio is active'
         : 'Switch to demo holdings ($1,000 per position)';
+      this.el.demoModeToggle.setAttribute('aria-label', enabled ? 'Demo mode on' : 'Demo mode off');
       this.el.demoModeToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     },
     setApiDebugToggle: function (enabled) {
@@ -351,28 +403,45 @@
         var node = self.el.assetRowTemplate.content.firstElementChild.cloneNode(true);
         node.dataset.key = item.key;
         var rowEl = node.querySelector('.asset-row');
+        var symbolEl = node.querySelector('.asset-row__symbol');
+        var nameEl = node.querySelector('.asset-row__name');
         if (rowEl) {
           rowEl.dataset.key = item.key;
           if (ctx.selectedKey === item.key) rowEl.classList.add('is-selected');
         }
-        node.querySelector('.asset-row__symbol').textContent = item.symbol;
-        if (ctx.hideHoldings) {
-          node.querySelector('.asset-row__name').textContent = item.name + ' • Holdings hidden';
-          node.querySelector('.asset-row__value').textContent = 'Hidden';
-        } else {
-          node.querySelector('.asset-row__name').textContent = item.name + ' • ' + fmtNumber(item.quantity) + ' @ ' + fmtCurrency(item.entryPrice);
-          node.querySelector('.asset-row__value').textContent = fmtCurrency(item.marketValue);
+        if (symbolEl) {
+          symbolEl.textContent = item.symbol;
+          symbolEl.title = item.name || item.symbol || '';
         }
-        var quoteStatusEl = node.querySelector('.asset-row__quote-status');
-        if (quoteStatusEl) {
+        if (nameEl) {
+          nameEl.textContent = '';
+        }
+        var valueEl = node.querySelector('.asset-row__value');
+        if (ctx.hideHoldings) {
+          valueEl.textContent = 'Hidden';
+          valueEl.title = '';
+        } else {
+          valueEl.textContent = fmtCurrency(item.marketValue);
+          valueEl.title = (isFinite(Number(item.quantity)) && isFinite(Number(item.entryPrice)))
+            ? (Number(item.quantity) + ' @ ' + fmtAssetUnitPrice(Number(item.entryPrice), item.type))
+            : '';
+        }
+        var quoteStatusEls = node.querySelectorAll('.asset-row__quote-status');
+        if (quoteStatusEls && quoteStatusEls.length) {
           var statusCls = item.quoteFetchedAt ? (item.quoteIsFresh ? 'quote-time--fresh' : 'quote-time--stale') : 'quote-time--missing';
-          var statusText = item.quoteFetchedAt
-            ? ('Updated: ' + new Date(item.quoteFetchedAt).toLocaleString())
-            : 'Updated: n/a';
           var statusTitle = item.quoteFetchedAt
             ? ('Last quote: ' + new Date(item.quoteFetchedAt).toLocaleString())
             : 'No live quote fetched yet';
-          quoteStatusEl.innerHTML = '<span class="' + statusCls + '" title="' + esc(statusTitle) + '">' + esc(statusText) + '</span>';
+          var statusHtml =
+            '<span class="quote-status-icon ' + statusCls + '" title="' + esc(statusTitle) + '" aria-label="' + esc(statusTitle) + '">' +
+              '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">' +
+                '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/>' +
+                '<path d="M15.9 7.1h3.4v3.4M19.3 10.5A7.3 7.3 0 0 0 8 6.3M8.1 16.9H4.7v-3.4M4.7 13.5A7.3 7.3 0 0 0 16 17.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+              '</svg>' +
+            '</span>';
+          quoteStatusEls.forEach(function (quoteStatusEl) {
+            quoteStatusEl.innerHTML = statusHtml;
+          });
         }
         var dayMoveEl = node.querySelector('.asset-row__daymove');
         if (dayMoveEl) {
@@ -393,9 +462,23 @@
         }
         var plEl = node.querySelector('.asset-row__pl');
         plEl.className = 'asset-row__pl ' + pctClass(item.plPct);
-        plEl.textContent = ctx.hideHoldings
+        var plPriceText = fmtAssetUnitPrice(item.price, item.type);
+        var plChangeText = ctx.hideHoldings
           ? ('P/L ' + pctText(item.plPct))
-          : ('Px ' + fmtCurrency(item.price) + ' • ' + fmtCurrency(item.plAmount) + ' (' + pctText(item.plPct) + ')');
+          : (fmtCurrency(item.plAmount) + ' (' + pctText(item.plPct) + ')');
+        var plText = ctx.hideHoldings
+          ? plChangeText
+          : (plPriceText + ' ' + plChangeText);
+        plEl.innerHTML = ctx.hideHoldings
+          ? ('<span class="asset-row__pl-change">' + esc(plChangeText) + '</span>')
+          : (
+            '<span class="asset-row__pl-price">' + esc(plPriceText) + '</span>' +
+            '<span class="asset-row__pl-sep" aria-hidden="true">|</span>' +
+            '<span class="asset-row__pl-change">' + esc(plChangeText) + '</span>'
+          );
+        plEl.title = isFinite(Number(item.entryPrice))
+          ? ('Avg entry: ' + fmtAssetUnitPrice(Number(item.entryPrice), item.type))
+          : plText;
         listEl.appendChild(node);
       });
     },
@@ -461,7 +544,7 @@
         if (price != null) {
           this.el.detailPriceBadge.classList.remove('hidden');
           this.el.detailPriceBadge.innerHTML =
-            '<span class="detail-price-badge__price">' + fmtCurrency(price) + '</span>' +
+            '<span class="detail-price-badge__price">' + fmtAssetUnitPrice(price, asset.type) + '</span>' +
             '<span class="detail-price-badge__change ' + cls + '">' + (changePct == null ? '—' : pctText(changePct)) + '</span>';
         } else {
           this.el.detailPriceBadge.classList.add('hidden');
@@ -475,7 +558,7 @@
         ].join('')
         : [
           '<span class="meta-chip">Qty: ' + fmtNumber(asset.quantity) + '</span>',
-          '<span class="meta-chip">Entry: ' + fmtCurrency(asset.entryPrice) + '</span>',
+          '<span class="meta-chip">Entry: ' + fmtAssetUnitPrice(asset.entryPrice, asset.type) + '</span>',
           '<span class="meta-chip">Value: ' + fmtCurrency(computed.marketValue) + '</span>',
           '<span class="meta-chip ' + pctClass(computed.plPct) + '">P/L: ' + fmtCurrency(computed.plAmount) + ' (' + pctText(computed.plPct) + ')</span>'
         ].join('');
@@ -523,7 +606,7 @@
           ['Open', fmtCurrency(data && data.open)],
           ['High', fmtCurrency(data && data.high)],
           ['Low', fmtCurrency(data && data.low)],
-          ['Volume', isFinite(Number(data && data.volume)) ? Number(data.volume).toLocaleString() : 'n/a'],
+          ['Volume', fmtCompactNumber(data && data.volume)],
           ['Last fetched', fetchedAtText],
           ['Source stamp', sourceStamp || 'n/a']
         ];
@@ -535,10 +618,10 @@
         }
       } else {
         entries = [
-          ['Price', fmtCurrency(data && data.price)],
+          ['Price', fmtAssetUnitPrice(data && data.price, 'crypto')],
           ['24h %', (data && isFinite(Number(data.change24h)) ? pctText(Number(data.change24h)) : 'n/a')],
-          ['Mkt Cap', fmtCurrency(data && data.marketCap)],
-          ['24h Vol', fmtCurrency(data && data.volume24h)],
+          ['Mkt Cap', fmtCompactCurrency(data && data.marketCap)],
+          ['24h Vol', fmtCompactCurrency(data && data.volume24h)],
           ['Coin ID', asset.coinId || 'n/a'],
           ['Source', 'CoinGecko']
         ];
@@ -732,7 +815,7 @@
         ? 'Add to Position'
         : (action === 'reduce' ? 'Reduce Position' : 'Remove Holding');
       this.el.positionSummary.textContent = asset
-        ? (asset.symbol + ' • Current Qty: ' + fmtNumber(asset.quantity) + ' • Avg Entry: ' + fmtCurrency(asset.entryPrice))
+        ? (asset.symbol + ' • Current Qty: ' + fmtNumber(asset.quantity) + ' • Avg Entry: ' + fmtAssetUnitPrice(asset.entryPrice, asset.type))
         : '';
       this.el.positionQtyInput.value = '';
       this.el.positionQtyInput.max = action === 'add' ? '' : String(asset && asset.quantity ? asset.quantity : '');

@@ -243,6 +243,50 @@
       });
       return remoteSaveQueue;
     },
+    // Reads a server-persisted chart cache snapshot by key.
+    getRemoteChartCache: function (key) {
+      var safeKey = String(key || '').trim();
+      if (!safeKey) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/chart-cache?key=' + encodeURIComponent(safeKey), {
+        cache: 'no-store'
+      }).then(function (payload) {
+        if (!payload || !payload.found) return null;
+        return {
+          key: safeKey,
+          items: Array.isArray(payload.items) ? payload.items : [],
+          fetchedAt: Math.max(0, Number(payload.fetchedAt || 0) || 0),
+          source: String(payload.source || '').trim() || null,
+          updatedAt: Math.max(0, Number(payload.updatedAt || 0) || 0)
+        };
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Writes a server-persisted chart cache snapshot by key.
+    saveRemoteChartCache: function (key, items, meta) {
+      var safeKey = String(key || '').trim();
+      if (!safeKey || !Array.isArray(items)) return Promise.resolve({ ok: false });
+      var payload = {
+        key: safeKey,
+        items: items,
+        fetchedAt: Math.max(0, Number(meta && meta.fetchedAt || 0) || Date.now()),
+        source: String(meta && meta.source || '').trim() || null
+      };
+      return fetch(apiBase() + '/api/chart-cache', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (json) {
+          return {
+            ok: !!response.ok,
+            updatedAt: Math.max(0, Number(json && json.updatedAt || 0) || 0)
+          };
+        });
+      }).catch(function () {
+        return { ok: false };
+      });
+    },
     // Exports a provided payload as a downloadable JSON file.
     exportPortfolioFile: function (payload) {
       var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });

@@ -671,6 +671,47 @@
       return runSequential(ordered, function (sourceId) {
         return sourceId === 'yahoo' ? yahooHistoryFallback(asset, limit) : runStooqHistory();
       }, 0);
+    },
+    getIntraday: function (asset, hours) {
+      var ordered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
+        ? PT.ApiSources.getOrdered('chart', 'stock')
+        : ['stooq', 'yahoo'];
+      if (ordered.indexOf('yahoo') < 0) {
+        return Promise.reject(new Error('Yahoo intraday source disabled'));
+      }
+      var yahooSymbol = String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
+      if (!yahooSymbol) return Promise.reject(new Error('Missing Yahoo symbol'));
+      var safeHours = Math.max(1, Math.min(96, Number(hours || 4) || 4));
+      return fetchYahooChartJson(yahooSymbol, {
+        range: '5d',
+        interval: '1h',
+        includePrePost: 'true',
+        events: 'div,splits'
+      }, 'StockAPI.getIntraday').then(function (data) {
+        var result = data && data.chart && Array.isArray(data.chart.result) ? data.chart.result[0] : null;
+        var ts = result && Array.isArray(result.timestamp) ? result.timestamp : [];
+        var quote = result && result.indicators && result.indicators.quote && result.indicators.quote[0] ? result.indicators.quote[0] : null;
+        if (!ts.length || !quote) throw new Error('No stock intraday rows');
+        var rows = [];
+        for (var i = 0; i < ts.length; i++) {
+          var close = num(quote.close && quote.close[i]);
+          if (close === null) continue;
+          var ms = Number(ts[i]) * 1000;
+          rows.push({
+            ts: ms,
+            t: new Date(ms).toISOString().slice(0, 16).replace('T', ' '),
+            o: num(quote.open && quote.open[i]),
+            h: num(quote.high && quote.high[i]),
+            l: num(quote.low && quote.low[i]),
+            c: close,
+            v: num(quote.volume && quote.volume[i])
+          });
+        }
+        if (!rows.length) throw new Error('No parsed stock intraday rows');
+        var cutoff = Date.now() - (safeHours * 60 * 60 * 1000);
+        var filtered = rows.filter(function (row) { return Number(row.ts) >= cutoff; });
+        return (filtered.length ? filtered : rows).slice(-(safeHours + 6));
+      });
     }
   };
 })();

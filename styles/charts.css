@@ -36,3 +36,38 @@
   font-size: 0.9rem;
   background: rgba(0, 0, 0, 0.15);
 }
+
+@media (max-width: 480px) {
+  .chart-wrap--pie {
+    height: 214px;
+    padding: 0.34rem;
+  }
+
+  .chart-wrap--line {
+    height: 184px;
+    padding: 0.3rem;
+  }
+
+  .chart-wrap--dominance {
+    height: 142px;
+    padding: 0.28rem;
+  }
+
+  .chart-fallback {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .chart-wrap--pie {
+    height: 198px;
+  }
+
+  .chart-wrap--line {
+    height: 170px;
+  }
+
+  .chart-wrap--dominance {
+    height: 130px;
+  }
+}

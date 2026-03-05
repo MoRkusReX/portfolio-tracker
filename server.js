@@ -567,6 +567,13 @@ function dbNewsStateKey(rawKey) {
   return `news:${key}`;
 }
 
+// Builds a stable SQLite key for per-scope chart snapshots.
+function dbChartStateKey(rawKey) {
+  const key = String(rawKey || '').trim();
+  if (!key) return '';
+  return `chart:${key}`;
+}
+
 // Reads the latest persisted news payload for a given cache key.
 app.get('/api/news-cache', async (req, res) => {
   try {
@@ -621,6 +628,64 @@ app.put('/api/news-cache', async (req, res) => {
     return res.status(500).json({
       error: 'news_cache_write_failed',
       detail: String(err && err.message || 'Failed to save news cache').slice(0, 240)
+    });
+  }
+});
+
+// Reads the latest persisted chart payload for a given cache key.
+app.get('/api/chart-cache', async (req, res) => {
+  try {
+    const key = String(req.query.key || '').trim();
+    const stateKey = dbChartStateKey(key);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_key' });
+    }
+    const stored = await runDb('get_state', [stateKey]);
+    const payload = stored && stored.payload && typeof stored.payload === 'object' ? stored.payload : {};
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    return res.json({
+      found: !!(stored && stored.found),
+      key,
+      items,
+      fetchedAt: Number(payload.fetchedAt || 0) || 0,
+      source: String(payload.source || '').trim() || null,
+      updatedAt: Number(stored && stored.updatedAt || 0) || 0
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'chart_cache_read_failed',
+      detail: String(err && err.message || 'Failed to load chart cache').slice(0, 240)
+    });
+  }
+});
+
+// Persists the latest fetched chart payload for a given cache key.
+app.put('/api/chart-cache', async (req, res) => {
+  try {
+    const key = String(req.body && req.body.key || '').trim();
+    const stateKey = dbChartStateKey(key);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_key' });
+    }
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
+    if (!items) {
+      return res.status(400).json({ error: 'invalid_items' });
+    }
+    const payload = {
+      items,
+      fetchedAt: Math.max(0, Number(req.body && req.body.fetchedAt || 0) || Date.now()),
+      source: String(req.body && req.body.source || '').trim() || null
+    };
+    const result = await runDb('set_state', [stateKey], payload);
+    return res.json({
+      ok: true,
+      key,
+      updatedAt: Number(result && result.updatedAt || 0) || Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'chart_cache_write_failed',
+      detail: String(err && err.message || 'Failed to save chart cache').slice(0, 240)
     });
   }
 });

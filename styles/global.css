@@ -416,3 +416,81 @@ html[data-layout="wide"] .portfolio-grid {
     flex: 0 0 auto;
   }
 }
+
+@media (max-width: 480px) {
+  .app-shell {
+    padding: 0.45rem;
+  }
+
+  .topbar {
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .brand {
+    padding: 0.24rem 0.36rem;
+  }
+
+  .brand__mark {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    font-size: 0.84rem;
+  }
+
+  .brand h1 {
+    font-size: 1rem;
+    line-height: 1.1;
+  }
+
+  .brand p {
+    font-size: 0.74rem;
+    margin-top: 0.06rem;
+  }
+
+  .topbar__group {
+    padding: 0.18rem;
+    gap: 0.22rem;
+  }
+
+  .topbar__group--mode {
+    justify-content: space-between;
+  }
+
+  .topbar__group--mode .status-badge {
+    margin-left: auto;
+  }
+
+  .topbar__group--actions {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .topbar__group--actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .topbar__group--actions .btn,
+  .topbar__group--actions .file-btn {
+    flex: 0 0 auto;
+  }
+
+  .layout {
+    margin-top: 0.58rem;
+    gap: 0.58rem;
+  }
+
+  .main-panel,
+  .side-panel,
+  .indicators-panel {
+    gap: 0.58rem;
+  }
+
+  .side-panel,
+  .indicators-panel {
+    padding: 0.72rem;
+  }
+}
