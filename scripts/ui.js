@@ -200,6 +200,7 @@
         indicatorsAssetLabel: qs('indicatorsAssetLabel'),
         indicatorsOverallPill: qs('indicatorsOverallPill'),
         indicatorsMeta: qs('indicatorsMeta'),
+        indicatorsTrendMeter: qs('indicatorsTrendMeter'),
         indicatorsTimeframes: qs('indicatorsTimeframes'),
         indicatorExplorerModal: qs('indicatorExplorerModal'),
         indicatorExplorerCloseBtn: qs('indicatorExplorerCloseBtn'),
@@ -216,6 +217,7 @@
         indicatorExplorerModeLabel: qs('indicatorExplorerModeLabel'),
         indicatorExplorerOverallPill: qs('indicatorExplorerOverallPill'),
         indicatorExplorerMeta: qs('indicatorExplorerMeta'),
+        indicatorExplorerTrendMeter: qs('indicatorExplorerTrendMeter'),
         indicatorExplorerTimeframes: qs('indicatorExplorerTimeframes'),
         assetTypeInput: qs('assetTypeInput'),
         assetSearchInput: qs('assetSearchInput'),
@@ -804,6 +806,70 @@
         return isFinite(n) ? pctText(n) : 'n/a';
       }
 
+      function asScore(value) {
+        var n = Number(value);
+        return isFinite(n) ? n : 0;
+      }
+
+      function fmtTiny(value) {
+        var n = Number(value);
+        if (!isFinite(n)) return 'n/a';
+        return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+      }
+
+      function trendLabelFromScore(score) {
+        if (score >= 2) return 'Bullish';
+        if (score <= -2) return 'Bearish';
+        return 'Neutral';
+      }
+
+      function trendMeterBlock() {
+        var provided = (config && config.trendMeter) || {};
+        var hasAny = ['1d', '1w', '1m'].some(function (key) { return !!timeframes[key]; });
+        if (!hasAny) return '<div class="muted">No trend meter yet. Refresh Prices.</div>';
+        var rows = {};
+        var weights = { '1d': 1, '1w': 2, '1m': 3 };
+        var weighted = 0;
+        ['1d', '1w', '1m'].forEach(function (key) {
+          var tf = timeframes[key] || {};
+          var trend = tf.trendMeter || {};
+          var score = asScore(trend.timeframeScore);
+          weighted += score * weights[key];
+          rows[key] = {
+            score: score,
+            label: trend.label || trendLabelFromScore(score),
+            breakdown: trend.breakdown || null
+          };
+        });
+        var overallScore = isFinite(Number(provided.overallScore)) ? Number(provided.overallScore) : weighted;
+        var overallLabel = provided.overallLabel || (overallScore >= 4 ? 'Bullish' : (overallScore <= -4 ? 'Bearish' : 'Neutral'));
+        var rowHtml = ['1d', '1w', '1m'].map(function (key) {
+          var row = rows[key];
+          var b = row.breakdown || {};
+          return '<details class="trend-meter__item">' +
+            '<summary>' +
+              '<span class="trend-meter__tf">' + esc(String(key).toUpperCase()) + '</span>' +
+              '<span class="trend-meter__score">Score ' + esc(String(row.score)) + '</span>' +
+              '<span class="' + pillClass(row.label) + '">' + esc(row.label) + '</span>' +
+            '</summary>' +
+            '<div class="trend-meter__details">' +
+              '<span>EMA ' + esc(String(asScore(b.emaScore))) + ' • close ' + esc(fmtTiny(b.close)) + ' • 20 ' + esc(fmtTiny(b.ema20)) + ' • 50 ' + esc(fmtTiny(b.ema50)) + ' • 200 ' + esc(fmtTiny(b.ema200)) + '</span>' +
+              '<span>RSI ' + esc(String(asScore(b.rsiScore))) + ' • value ' + esc(fmtTiny(b.rsiValue)) + '</span>' +
+              '<span>MACD ' + esc(String(asScore(b.macdScore))) + ' • line ' + esc(fmtTiny(b.macdLine)) + ' • signal ' + esc(fmtTiny(b.macdSignal)) + ' • hist ' + esc(fmtTiny(b.macdHistogram)) + '</span>' +
+              '<span>SR ' + esc(String(asScore(b.srScore))) + ' • ' + esc(String(b.srStatus || 'n/a')) + '</span>' +
+            '</div>' +
+          '</details>';
+        }).join('');
+        return '<div class="trend-meter__head">' +
+          '<div class="trend-meter__title">Trend Meter</div>' +
+          '<div class="trend-meter__overall">' +
+            '<span class="trend-meter__overall-score">Overall ' + esc(String(overallScore)) + '</span>' +
+            '<span class="' + pillClass(overallLabel) + '">' + esc(overallLabel) + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="trend-meter__rows">' + rowHtml + '</div>';
+      }
+
       function srBlock(tf) {
         var values = tf && tf.values && tf.values.sr ? tf.values.sr : {};
         var pivot = values.pivot || {};
@@ -857,10 +923,58 @@
         '</div>';
       }
 
+      function reversalBlock(tf) {
+        var reversal = tf && tf.reversal ? tf.reversal : {};
+        var score = asScore(reversal.score);
+        var label = reversal.label || 'No reversal signal';
+        var reasons = Array.isArray(reversal.reasons) ? reversal.reasons : [];
+        var hint = reasons.length ? reasons.join(' • ') : 'No qualifying reversal conditions.';
+        return '<div class="indicator-tech indicator-tech--reversal">' +
+          '<div class="indicator-tech__head">' +
+            '<div class="indicator-tech__title-wrap">' +
+              '<div class="indicator-tech__title">Reversal</div>' +
+              '<span class="indicator-tech__meta">• ' + esc(label) + '</span>' +
+            '</div>' +
+            '<span class="indicator-reversal__badge">' + esc(String(score)) + '/5</span>' +
+          '</div>' +
+          '<div class="indicator-tech__metrics indicator-tech__metrics--2">' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Score</span><strong>' + esc(String(score)) + '/5</strong></div>' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Reasons</span><strong>' + esc(String(reasons.length)) + '</strong></div>' +
+          '</div>' +
+          '<div class="indicator-tech__note indicator-reversal__reasons">' + esc(hint) + '</div>' +
+        '</div>';
+      }
+
+      function emaPositionBlock(tf) {
+        var ep = (tf && tf.emaPosition) || (tf && tf.values && tf.values.emaPosition) || {};
+        var label = String(ep.label || 'Neutral');
+        var relation = String(ep.relation || '');
+        var toneClass = 'indicator-ema-position__badge--neutral';
+        if (label === 'Strong Bullish') toneClass = 'indicator-ema-position__badge--bullish';
+        else if (label === 'Pullback') toneClass = 'indicator-ema-position__badge--pullback';
+        else if (label === 'Trend Test') toneClass = 'indicator-ema-position__badge--test';
+        else if (label === 'Bearish Risk') toneClass = 'indicator-ema-position__badge--bearish';
+        return '<div class="indicator-tech indicator-tech--ema-position">' +
+          '<div class="indicator-tech__head">' +
+            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">EMA Position</div>' + (relation ? '<span class="indicator-tech__meta">• ' + esc(relation) + '</span>' : '') + '</div>' +
+            '<span class="indicator-ema-position__badge ' + toneClass + '">' + esc(label) + '</span>' +
+          '</div>' +
+          '<div class="indicator-tech__metrics indicator-tech__metrics--3 indicator-ema-position__values">' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Close</span><strong>' + esc(fmtIndicator(ep.close)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>EMA20</span><strong>' + esc(fmtIndicator(ep.ema20)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>EMA50</span><strong>' + esc(fmtIndicator(ep.ema50)) + '</strong></div>' +
+          '</div>' +
+          (relation ? '<div class="indicator-tech__note indicator-ema-position__relation">' + esc(relation) + '</div>' : '') +
+        '</div>';
+      }
+
       if (this.el.indicatorsAssetLabel) {
         this.el.indicatorsAssetLabel.textContent = assetLabel;
       }
       this.el.indicatorsMeta.textContent = metaText;
+      if (this.el.indicatorsTrendMeter) {
+        this.el.indicatorsTrendMeter.innerHTML = trendMeterBlock();
+      }
       this.el.indicatorsOverallPill.className = pillClass(overall) + ' indicator-pill--overall';
       this.el.indicatorsOverallPill.textContent = overall;
 
@@ -910,7 +1024,9 @@
               { label: 'Upper', value: fmtIndicator(values.bbUpper) },
               { label: 'Lower', value: fmtIndicator(values.bbLower) }
             ], String(values.bollingerPosition || 'n/a')) +
+            emaPositionBlock(tf) +
             srBlock(tf) +
+            reversalBlock(tf) +
           '</div>' +
           '<div class="indicator-note">Score: ' + esc(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
         '</section>';
