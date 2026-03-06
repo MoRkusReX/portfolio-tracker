@@ -148,6 +148,7 @@
         overviewTitle: qs('overviewTitle'),
         overviewSubtitle: qs('overviewSubtitle'),
         detailTitle: qs('detailTitle'),
+        detailPanel: qs('detailPanel'),
         detailPriceBadge: qs('detailPriceBadge'),
         detailMeta: qs('detailMeta'),
         detailChartTimeframes: qs('detailChartTimeframes'),
@@ -626,9 +627,16 @@
           ['Source', 'CoinGecko']
         ];
       }
+      function slugLabel(text) {
+        return String(text || '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+      }
       this.el.marketDataGrid.innerHTML = entries.map(function (pair) {
         var valueClass = pair[2] ? (' ' + pair[2]) : '';
-        return '<div class="mini-card"><span>' + esc(pair[0]) + '</span><strong class="' + valueClass.trim() + '">' + esc(pair[1]) + '</strong></div>';
+        var labelClass = slugLabel(pair[0]);
+        return '<div class="mini-card mini-card--' + esc(labelClass) + '"><span>' + esc(pair[0]) + '</span><strong class="' + valueClass.trim() + '">' + esc(pair[1]) + '</strong></div>';
       }).join('');
     },
     renderNews: function (items, errorMsg) {
@@ -740,6 +748,29 @@
         return 'indicator-pill indicator-pill--neutral';
       }
 
+      function trendMeta(status) {
+        var normalized = String(status || 'Neutral').toLowerCase();
+        if (normalized === 'bullish') {
+          return {
+            cls: 'indicator-trend indicator-trend--bullish',
+            label: 'Bullish trend',
+            icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5.2-5.2 3.6 3.6L20 7.2M14.8 7.2H20v5.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          };
+        }
+        if (normalized === 'bearish') {
+          return {
+            cls: 'indicator-trend indicator-trend--bearish',
+            label: 'Bearish trend',
+            icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8l5.2 5.2 3.6-3.6L20 16.8M14.8 16.8H20v-5.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          };
+        }
+        return {
+          cls: 'indicator-trend indicator-trend--neutral',
+          label: 'Neutral trend',
+          icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13.2M13.2 8.8 20 12l-6.8 3.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        };
+      }
+
       function fmtIndicator(value) {
         var numValue = Number(value);
         if (!isFinite(numValue)) return 'n/a';
@@ -748,11 +779,81 @@
         return numValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits });
       }
 
-      function row(label, primary, secondary, status) {
-        return '<div class="indicator-row">' +
-          '<div class="indicator-row__label">' + esc(label) + '</div>' +
-          '<div class="indicator-row__value"><strong>' + esc(primary) + '</strong>' + (secondary ? '<small>' + esc(secondary) + '</small>' : '') + '</div>' +
-          '<span class="' + pillClass(status) + '">' + esc(status || 'Neutral') + '</span>' +
+      function techBlock(title, status, metrics, note, noteClass) {
+        var list = Array.isArray(metrics) ? metrics : [];
+        var count = list.length <= 1 ? 1 : (list.length === 2 ? 2 : 3);
+        var meta = note ? ('<span class="indicator-tech__meta' + (noteClass ? (' ' + esc(noteClass)) : '') + '">• ' + esc(note) + '</span>') : '';
+        return '<div class="indicator-tech">' +
+          '<div class="indicator-tech__head">' +
+            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">' + esc(title) + '</div>' + meta + '</div>' +
+            '<span class="' + pillClass(status) + '">' + esc(status || 'Neutral') + '</span>' +
+          '</div>' +
+          '<div class="indicator-tech__metrics indicator-tech__metrics--' + count + '">' +
+            list.map(function (item) {
+              return '<div class="indicator-sr__metric indicator-tech__metric">' +
+                '<span>' + esc(item && item.label) + '</span>' +
+                '<strong>' + esc(item && item.value) + '</strong>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>';
+      }
+
+      function fmtPctMaybe(value) {
+        var n = Number(value);
+        return isFinite(n) ? pctText(n) : 'n/a';
+      }
+
+      function srBlock(tf) {
+        var values = tf && tf.values && tf.values.sr ? tf.values.sr : {};
+        var pivot = values.pivot || {};
+        var donchian = values.donchian || {};
+        var nearest = values.nearest || {};
+        var srStatus = tf && tf.statuses ? tf.statuses.sr : 'Neutral';
+        var channelWidthPct = (isFinite(Number(donchian.support)) && isFinite(Number(donchian.resistance)) && isFinite(Number(tf && tf.close)) && Number(tf.close) !== 0)
+          ? ((Number(donchian.resistance) - Number(donchian.support)) / Number(tf.close)) * 100
+          : NaN;
+        var supportClass = isFinite(Number(nearest.supportDistancePct)) && Number(nearest.supportDistancePct) <= 2.5
+          ? ' indicator-sr__nearest-card--near'
+          : '';
+        var resistanceClass = isFinite(Number(nearest.resistanceDistancePct)) && Number(nearest.resistanceDistancePct) <= 2.5
+          ? ' indicator-sr__nearest-card--near'
+          : '';
+        return '<div class="indicator-sr">' +
+          '<div class="indicator-sr__head">' +
+            '<div class="indicator-sr__title">Support &amp; Resistance</div>' +
+            '<span class="' + pillClass(srStatus) + '">' + esc(srStatus || 'Neutral') + '</span>' +
+          '</div>' +
+          '<div class="indicator-sr__nearest">' +
+            '<article class="indicator-sr__nearest-card indicator-sr__nearest-card--support' + supportClass + '">' +
+              '<span class="indicator-sr__kicker">Nearest Support</span>' +
+              '<strong>' + esc(fmtIndicator(nearest.support)) + '</strong>' +
+              '<small>' + esc(fmtPctMaybe(nearest.supportDistancePct)) + '</small>' +
+            '</article>' +
+            '<article class="indicator-sr__nearest-card indicator-sr__nearest-card--resistance' + resistanceClass + '">' +
+              '<span class="indicator-sr__kicker">Nearest Resistance</span>' +
+              '<strong>' + esc(fmtIndicator(nearest.resistance)) + '</strong>' +
+              '<small>' + esc(fmtPctMaybe(nearest.resistanceDistancePct)) + '</small>' +
+            '</article>' +
+          '</div>' +
+          '<div class="indicator-sr__pivot-grid">' +
+            '<div class="indicator-sr__metric indicator-sr__metric--s2"><span>S2</span><strong>' + esc(fmtIndicator(pivot.s2)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-sr__metric--s1"><span>S1</span><strong>' + esc(fmtIndicator(pivot.s1)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-sr__metric--p"><span>P</span><strong>' + esc(fmtIndicator(pivot.p)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-sr__metric--r1"><span>R1</span><strong>' + esc(fmtIndicator(pivot.r1)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-sr__metric--r2"><span>R2</span><strong>' + esc(fmtIndicator(pivot.r2)) + '</strong></div>' +
+          '</div>' +
+          '<div class="indicator-sr__donchian">' +
+            '<div class="indicator-sr__donchian-head">' +
+              '<span>Donchian Channel</span>' +
+              '<small>Width ' + esc(fmtPctMaybe(channelWidthPct)) + '</small>' +
+            '</div>' +
+            '<div class="indicator-sr__donchian-grid">' +
+              '<div class="indicator-sr__metric indicator-sr__metric--support"><span>Support</span><strong>' + esc(fmtIndicator(donchian.support)) + '</strong></div>' +
+              '<div class="indicator-sr__metric"><span>Mid</span><strong>' + esc(fmtIndicator(donchian.midpoint)) + '</strong></div>' +
+              '<div class="indicator-sr__metric indicator-sr__metric--resistance"><span>Resistance</span><strong>' + esc(fmtIndicator(donchian.resistance)) + '</strong></div>' +
+            '</div>' +
+          '</div>' +
         '</div>';
       }
 
@@ -760,7 +861,7 @@
         this.el.indicatorsAssetLabel.textContent = assetLabel;
       }
       this.el.indicatorsMeta.textContent = metaText;
-      this.el.indicatorsOverallPill.className = pillClass(overall);
+      this.el.indicatorsOverallPill.className = pillClass(overall) + ' indicator-pill--overall';
       this.el.indicatorsOverallPill.textContent = overall;
 
       this.el.indicatorsTimeframes.innerHTML = ['1d', '1w', '1m'].map(function (key) {
@@ -769,13 +870,47 @@
         hasRows = true;
         var values = tf.values || {};
         var statuses = tf.statuses || {};
+        var trend = trendMeta(tf.overall);
+        var closeValue = Number(tf.close);
+        var ema20Value = Number(values.ema20);
+        var ema50Value = Number(values.ema50);
+        var emaSignal = '▽ Below EMA20';
+        var emaSignalClass = 'indicator-tech__note--neutral';
+        if (isFinite(closeValue) && isFinite(ema20Value) && isFinite(ema50Value)) {
+          if (closeValue > ema20Value) {
+            emaSignal = '▲ Strong above EMA20';
+            emaSignalClass = 'indicator-tech__note--up';
+          } else if (closeValue < ema50Value) {
+            emaSignal = '▽ Closed below EMA50';
+            emaSignalClass = 'indicator-tech__note--down';
+          } else {
+            emaSignal = '▽ Below EMA20';
+            emaSignalClass = 'indicator-tech__note--neutral';
+          }
+        }
         return '<section class="indicator-card">' +
-          '<div class="indicator-card__head"><h4>' + esc(String(key).toUpperCase()) + '</h4><span class="' + pillClass(tf.overall) + '">' + esc(tf.overall || 'Neutral') + '</span></div>' +
+          '<div class="indicator-card__head"><h4>' + esc(String(key).toUpperCase()) + '</h4><span class="' + esc(trend.cls) + '" title="' + esc(trend.label) + '" aria-label="' + esc(trend.label) + '">' + trend.icon + '</span><span class="' + pillClass(tf.overall) + '">' + esc(tf.overall || 'Neutral') + '</span></div>' +
           '<div class="indicator-card__rows">' +
-            row('EMA Trend', 'EMA20 ' + fmtIndicator(values.ema20) + ' | EMA50 ' + fmtIndicator(values.ema50), 'Close ' + fmtIndicator(tf.close), statuses.ema) +
-            row('RSI 14', fmtIndicator(values.rsi14), 'Wilder smoothing', statuses.rsi) +
-            row('MACD', 'Line ' + fmtIndicator(values.macdLine) + ' | Signal ' + fmtIndicator(values.macdSignal), 'Hist ' + fmtIndicator(values.macdHistogram), statuses.macd) +
-            row('Bollinger', 'Mid ' + fmtIndicator(values.bbMiddle) + ' | Up ' + fmtIndicator(values.bbUpper), 'Low ' + fmtIndicator(values.bbLower) + ' | ' + String(values.bollingerPosition || 'n/a'), statuses.bollinger) +
+            techBlock('EMA Trend', statuses.ema, [
+              { label: 'EMA20', value: fmtIndicator(values.ema20) },
+              { label: 'EMA50', value: fmtIndicator(values.ema50) },
+              { label: 'Close', value: fmtIndicator(tf.close) }
+            ], emaSignal, emaSignalClass) +
+            techBlock('RSI 14', statuses.rsi, [
+              { label: 'RSI', value: fmtIndicator(values.rsi14) },
+              { label: 'Period', value: '14' }
+            ], 'Wilder smoothing') +
+            techBlock('MACD', statuses.macd, [
+              { label: 'Line', value: fmtIndicator(values.macdLine) },
+              { label: 'Signal', value: fmtIndicator(values.macdSignal) },
+              { label: 'Hist', value: fmtIndicator(values.macdHistogram) }
+            ]) +
+            techBlock('Bollinger', statuses.bollinger, [
+              { label: 'Mid', value: fmtIndicator(values.bbMiddle) },
+              { label: 'Upper', value: fmtIndicator(values.bbUpper) },
+              { label: 'Lower', value: fmtIndicator(values.bbLower) }
+            ], String(values.bollingerPosition || 'n/a')) +
+            srBlock(tf) +
           '</div>' +
           '<div class="indicator-note">Score: ' + esc(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
         '</section>';

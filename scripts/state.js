@@ -83,7 +83,7 @@
     {
       id: 'indicators',
       label: 'Indicators',
-      note: 'Indicator candles and signal calculations for stocks and crypto assets',
+      note: 'Historical OHLCV for indicators (EMA/RSI/MACD/Bollinger + Support/Resistance)',
       sources: [
         { id: 'twelvedata', label: 'Twelve Data', assetTypes: ['stock', 'crypto'], enabled: true, requiresKey: true }
       ]

@@ -64,12 +64,13 @@
         var values = normalizeRows(payload && payload.values);
         if (!values.length) throw new Error('No indicator candles returned');
         return {
-          source: 'twelvedata',
+          source: String(payload && payload.source || 'twelvedata'),
           symbol: safeSymbol,
           interval: safeInterval,
           meta: payload && payload.meta ? payload.meta : {},
           values: values,
-          fetchedAt: payload && payload.fetchedAt ? payload.fetchedAt : Date.now()
+          fetchedAt: payload && payload.fetchedAt ? payload.fetchedAt : Date.now(),
+          cache: payload && payload.cache ? payload.cache : null
         };
       });
     }

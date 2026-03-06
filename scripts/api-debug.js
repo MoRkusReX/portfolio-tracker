@@ -17,7 +17,7 @@
     { key: 'yahooNews', label: 'Yahoo News RSS', description: 'Used for finance/news feeds in the News panel when Yahoo is selected.' },
     { key: 'tickertick', label: 'TickerTick', description: 'Used for alternative news sourcing in the News panel when TickerTick is selected.' },
     { key: 'stocktwits', label: 'StockTwits Proxy', description: 'Used for the Socials panel via the local proxy route for StockTwits requests.' },
-    { key: 'twelvedata', label: 'Twelve Data Proxy', description: 'Used for paid quote fallback and the Indicators panel time-series candles through the local proxy.' },
+    { key: 'twelvedata', label: 'Twelve Data Proxy', description: 'Used for paid quote fallback and historical OHLCV in Indicators (EMA/RSI/MACD/Bollinger + Support/Resistance).' },
     { key: 'coinmarketcap', label: 'CoinMarketCap Proxy', description: 'Used as crypto quote fallback through the local proxy when CoinGecko is not enough.' },
     { key: 'genericProxy', label: 'Generic Proxy (Other)', description: 'Used when the browser routes a third-party request through the generic local proxy endpoint.' },
     { key: 'other', label: 'Other / Unclassified', description: 'Used for requests that do not match a known tracked API bucket yet.' }

@@ -19,6 +19,18 @@
     });
   }
 
+  function highsFromCandles(candles) {
+    return (Array.isArray(candles) ? candles : []).map(function (row) {
+      return toNumber(row && row.h);
+    });
+  }
+
+  function lowsFromCandles(candles) {
+    return (Array.isArray(candles) ? candles : []).map(function (row) {
+      return toNumber(row && row.l);
+    });
+  }
+
   function sma(values, period) {
     var out = new Array(Array.isArray(values) ? values.length : 0).fill(null);
     if (!Array.isArray(values) || period <= 0) return out;
@@ -208,6 +220,98 @@
     return 0;
   }
 
+  function computePivotLevels(prevCandle) {
+    var high = toNumber(prevCandle && prevCandle.h);
+    var low = toNumber(prevCandle && prevCandle.l);
+    var close = toNumber(prevCandle && prevCandle.c);
+    if (high == null || low == null || close == null) return null;
+    var p = (high + low + close) / 3;
+    var r1 = (2 * p) - low;
+    var s1 = (2 * p) - high;
+    var span = high - low;
+    var r2 = p + span;
+    var s2 = p - span;
+    return {
+      p: p,
+      s1: s1,
+      s2: s2,
+      r1: r1,
+      r2: r2
+    };
+  }
+
+  function computeDonchian(highs, lows, period) {
+    var safePeriod = Math.max(1, Number(period) || 1);
+    var hi = Array.isArray(highs) ? highs.slice() : [];
+    var lo = Array.isArray(lows) ? lows.slice() : [];
+    var start = Math.max(0, Math.min(hi.length, lo.length) - safePeriod);
+    var windowHighs = hi.slice(start).map(toNumber).filter(function (v) { return v != null; });
+    var windowLows = lo.slice(start).map(toNumber).filter(function (v) { return v != null; });
+    if (!windowHighs.length || !windowLows.length) return null;
+    var resistance = Math.max.apply(null, windowHighs);
+    var support = Math.min.apply(null, windowLows);
+    if (!(isFinite(resistance) && isFinite(support)) || resistance < support) return null;
+    return {
+      support: support,
+      resistance: resistance,
+      midpoint: (support + resistance) / 2,
+      period: safePeriod
+    };
+  }
+
+  function distancePct(from, to) {
+    var a = toNumber(from);
+    var b = toNumber(to);
+    if (a == null || b == null || a === 0) return null;
+    return ((b - a) / Math.abs(a)) * 100;
+  }
+
+  function findNearestSupportResistance(close, pivot, donchian) {
+    var current = toNumber(close);
+    if (current == null) {
+      return {
+        support: null,
+        resistance: null,
+        supportDistancePct: null,
+        resistanceDistancePct: null
+      };
+    }
+    var supports = [];
+    var resistances = [];
+    if (pivot) {
+      [pivot.s1, pivot.s2].forEach(function (level) {
+        var n = toNumber(level);
+        if (n == null) return;
+        if (n < current) supports.push(n);
+        if (n > current) resistances.push(n);
+      });
+    }
+    if (donchian) {
+      var ds = toNumber(donchian.support);
+      var dr = toNumber(donchian.resistance);
+      if (ds != null && ds < current) supports.push(ds);
+      if (dr != null && dr > current) resistances.push(dr);
+    }
+    var support = supports.length ? Math.max.apply(null, supports) : null;
+    var resistance = resistances.length ? Math.min.apply(null, resistances) : null;
+    return {
+      support: support,
+      resistance: resistance,
+      supportDistancePct: support == null ? null : distancePct(current, support),
+      resistanceDistancePct: resistance == null ? null : distancePct(current, resistance)
+    };
+  }
+
+  function computeSRStatus(close, pivot, donchian) {
+    var current = toNumber(close);
+    var p = pivot && toNumber(pivot.p);
+    var midpoint = donchian && toNumber(donchian.midpoint);
+    if (current == null || p == null || midpoint == null) return 'Neutral';
+    if (current > p && current >= midpoint) return 'Bullish';
+    if (current < p && current < midpoint) return 'Bearish';
+    return 'Neutral';
+  }
+
   function analyze(candles, options) {
     var list = Array.isArray(candles) ? candles : [];
     if (!list.length) {
@@ -222,6 +326,8 @@
 
     var settings = options || {};
     var close = closesFromCandles(list);
+    var highs = highsFromCandles(list);
+    var lows = lowsFromCandles(list);
     var latestClose = latestValue(close);
     var ema20Series = ema(close, 20);
     var ema50Series = ema(close, 50);
@@ -276,11 +382,19 @@
       else bollingerPosition = 'Inside bands';
     }
 
+    var prevCompletedCandle = list.length >= 2 ? list[list.length - 2] : (list.length ? list[list.length - 1] : null);
+    var donchianPeriod = settings.timeKey === '1m' ? 12 : 20;
+    var pivotLevels = computePivotLevels(prevCompletedCandle);
+    var donchianLevels = computeDonchian(highs, lows, donchianPeriod);
+    var nearestSR = findNearestSupportResistance(latestClose, pivotLevels, donchianLevels);
+    var srStatus = computeSRStatus(latestClose, pivotLevels, donchianLevels);
+
     var score =
       scoreFromStatus(emaStatus) +
       scoreFromStatus(rsiStatus) +
       scoreFromStatus(macdStatus) +
-      scoreFromStatus(bollingerStatus);
+      scoreFromStatus(bollingerStatus) +
+      scoreFromStatus(srStatus);
 
     return {
       timeKey: settings.timeKey || null,
@@ -297,13 +411,19 @@
         bbMiddle: bbMiddle,
         bbUpper: bbUpper,
         bbLower: bbLower,
-        bollingerPosition: bollingerPosition
+        bollingerPosition: bollingerPosition,
+        sr: {
+          pivot: pivotLevels,
+          donchian: donchianLevels,
+          nearest: nearestSR
+        }
       },
       statuses: {
         ema: emaStatus,
         rsi: rsiStatus,
         macd: macdStatus,
-        bollinger: bollingerStatus
+        bollinger: bollingerStatus,
+        sr: srStatus
       },
       score: score,
       overall: score >= 2 ? 'Bullish' : (score <= -2 ? 'Bearish' : 'Neutral')
@@ -332,6 +452,10 @@
     rsi: rsi,
     macd: macd,
     bollinger: bollinger,
+    computePivotLevels: computePivotLevels,
+    computeDonchian: computeDonchian,
+    findNearestSupportResistance: findNearestSupportResistance,
+    computeSRStatus: computeSRStatus,
     analyze: analyze,
     summarizeByTimeframe: summarizeByTimeframe,
     _internals: {

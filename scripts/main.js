@@ -49,6 +49,9 @@
     '1w': { label: '1W', interval: '1week', warmup: 260, incremental: 8, maxCandles: 300, bucket: 'week' },
     '1m': { label: '1M', interval: '1month', warmup: 120, incremental: 5, maxCandles: 160, bucket: 'month' }
   };
+  var INDICATOR_DAILY_QUOTA = 800;
+  var INDICATOR_DAILY_BUDGET = Math.max(1, Math.floor(INDICATOR_DAILY_QUOTA * 0.7));
+  var INDICATOR_BUDGET_CACHE_KEY = 'indicators:budget';
   var CHART_TIMEFRAMES = [
     { id: '1D', label: '1D', days: 1, ttlMs: 1000 * 60 * 30 },
     { id: '1W', label: '1W', days: 7, ttlMs: 1000 * 60 * 45 },
@@ -459,6 +462,40 @@
     return date.getUTCFullYear() + '-' + String(date.getUTCMonth() + 1).padStart(2, '0') + '-' + String(date.getUTCDate()).padStart(2, '0');
   }
 
+  function localDayKey(ts) {
+    var d = new Date(ts || Date.now());
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function getIndicatorBudgetState() {
+    var cached = getCachedAny(INDICATOR_BUDGET_CACHE_KEY) || {};
+    var day = localDayKey(Date.now());
+    if (String(cached.day || '') !== day) {
+      cached = {
+        day: day,
+        callsToday: 0,
+        budget: INDICATOR_DAILY_BUDGET
+      };
+      storage.setCached(state.caches, INDICATOR_BUDGET_CACHE_KEY, cached);
+      storage.saveCache(state.caches);
+    }
+    return cached;
+  }
+
+  function canSpendIndicatorCall() {
+    var budget = getIndicatorBudgetState();
+    return Number(budget.callsToday || 0) < Number(budget.budget || INDICATOR_DAILY_BUDGET);
+  }
+
+  function spendIndicatorCall() {
+    var budget = getIndicatorBudgetState();
+    budget.callsToday = Number(budget.callsToday || 0) + 1;
+    budget.lastCallAt = Date.now();
+    storage.setCached(state.caches, INDICATOR_BUDGET_CACHE_KEY, budget);
+    storage.saveCache(state.caches);
+    return budget;
+  }
+
   function trimIndicatorCandles(candles, maxCandles) {
     var list = Array.isArray(candles) ? candles.slice() : [];
     if (list.length <= maxCandles) return list;
@@ -495,6 +532,10 @@
       return opts.error;
     }
     if (opts.usedCache) {
+      var budgetState = getIndicatorBudgetState();
+      if (opts.budgetGuard) {
+        return 'Using cached indicator data (daily indicator budget reached: ' + Number(budgetState.callsToday || 0) + '/' + Number(budgetState.budget || INDICATOR_DAILY_BUDGET) + ').';
+      }
       return 'Using cached indicator data.';
     }
     if (opts.lastFetchedAt) {
@@ -578,6 +619,7 @@
   function isIndicatorTimeframeFresh(timeframeKey, payload) {
     var tf = INDICATOR_TIMEFRAMES[timeframeKey];
     if (!tf || !payload || !isFinite(Number(payload.lastFetchedAt))) return false;
+    if (!payload.warmupComplete) return false;
     return indicatorBucketKey(tf.bucket, payload.lastFetchedAt) === indicatorBucketKey(tf.bucket, Date.now());
   }
 
@@ -605,6 +647,33 @@
       });
     }
 
+    if (!canSpendIndicatorCall()) {
+      var budgetComputed = getCachedAny(computedKey);
+      if (budgetComputed) {
+        return Promise.resolve({
+          snapshot: budgetComputed,
+          lastFetchedAt: Number(existing && existing.lastFetchedAt || 0) || 0,
+          fromCache: true,
+          budgetGuard: true
+        });
+      }
+      if (existing && Array.isArray(existing.candles) && existing.candles.length) {
+        try {
+          budgetComputed = computeIndicatorSnapshot(existing.candles, timeframeKey);
+          storage.setCached(state.caches, computedKey, budgetComputed);
+          storage.saveCache(state.caches);
+          return Promise.resolve({
+            snapshot: budgetComputed,
+            lastFetchedAt: Number(existing.lastFetchedAt || 0) || 0,
+            fromCache: true,
+            budgetGuard: true
+          });
+        } catch (err) {
+          return Promise.reject(err);
+        }
+      }
+    }
+
     if (INDICATOR_IN_FLIGHT[inflightKey]) return INDICATOR_IN_FLIGHT[inflightKey];
 
     var outputsize = existing && Array.isArray(existing.candles) && existing.candles.length
@@ -616,23 +685,41 @@
     }
 
     INDICATOR_IN_FLIGHT[inflightKey] = PT.IndicatorAPI.getTimeSeries(config.symbol, timeframe.interval, outputsize).then(function (response) {
+      if (response && response.cache && response.cache.didFetch) {
+        spendIndicatorCall();
+      }
       var merged = mergeIndicatorCandles(existing && existing.candles, response.values, timeframe.maxCandles);
       var newestTime = merged.length ? merged[merged.length - 1].t : null;
+      var hadExisting = !!(existing && Array.isArray(existing.candles) && existing.candles.length);
+      var latestExisting = hadExisting ? (existing.latestCandleTime || (existing.candles[existing.candles.length - 1] && existing.candles[existing.candles.length - 1].t)) : null;
+      var warmupComplete = !!((existing && existing.warmupComplete) || (!hadExisting && outputsize >= timeframe.warmup) || (hadExisting && Array.isArray(merged) && merged.length >= Math.min(timeframe.warmup, timeframe.maxCandles)));
+      var didChange = !latestExisting || (newestTime && String(newestTime) !== String(latestExisting));
       var payload = {
         symbol: config.symbol,
         timeframe: timeframeKey,
         candles: merged,
         latestCandleTime: newestTime,
-        lastFetchedAt: Date.now()
+        lastFetchedAt: Date.now(),
+        warmupComplete: warmupComplete
       };
       var snapshot = computeIndicatorSnapshot(merged, timeframeKey);
-      storage.setCached(state.caches, candleKey, payload);
-      storage.setCached(state.caches, computedKey, snapshot);
-      storage.saveCache(state.caches);
+      if (didChange || !existing || !Array.isArray(existing.candles) || !existing.candles.length || !existing.warmupComplete) {
+        storage.setCached(state.caches, candleKey, payload);
+        storage.setCached(state.caches, computedKey, snapshot);
+        storage.saveCache(state.caches);
+      } else {
+        var refreshedMeta = Object.assign({}, existing, {
+          lastFetchedAt: payload.lastFetchedAt,
+          warmupComplete: warmupComplete
+        });
+        storage.setCached(state.caches, candleKey, refreshedMeta);
+        storage.saveCache(state.caches);
+      }
       return {
         snapshot: snapshot,
         lastFetchedAt: payload.lastFetchedAt,
-        fromCache: false
+        fromCache: !(response && response.cache && response.cache.didFetch),
+        didChange: didChange
       };
     }).finally(function () {
       delete INDICATOR_IN_FLIGHT[inflightKey];
@@ -662,10 +749,12 @@
       var anyCache = false;
       var errorText = '';
       var lastFetchedAt = 0;
+      var budgetGuarded = false;
       results.forEach(function (result) {
         if (result.status === 'fulfilled' && result.value) {
           anyFresh = anyFresh || !result.value.fromCache;
           anyCache = anyCache || !!result.value.fromCache;
+          budgetGuarded = budgetGuarded || !!result.value.budgetGuard;
           lastFetchedAt = Math.max(lastFetchedAt, Number(result.value.lastFetchedAt || 0) || 0);
           return;
         }
@@ -676,7 +765,8 @@
       var nextState = rebuildIndicatorPanelState(modeKey, config, {
         error: errorText,
         usedCache: !anyFresh || anyCache,
-        lastFetchedAt: lastFetchedAt
+        lastFetchedAt: lastFetchedAt,
+        budgetGuard: budgetGuarded
       }, persistSlot);
       return {
         ok: !errorText,
@@ -1328,6 +1418,29 @@
       return 'indicator-pill indicator-pill--neutral';
     }
 
+    function trendMeta(status) {
+      var normalized = String(status || 'Neutral').toLowerCase();
+      if (normalized === 'bullish') {
+        return {
+          cls: 'indicator-trend indicator-trend--bullish',
+          label: 'Bullish trend',
+          icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5.2-5.2 3.6 3.6L20 7.2M14.8 7.2H20v5.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        };
+      }
+      if (normalized === 'bearish') {
+        return {
+          cls: 'indicator-trend indicator-trend--bearish',
+          label: 'Bearish trend',
+          icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8l5.2 5.2 3.6-3.6L20 16.8M14.8 16.8H20v-5.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        };
+      }
+      return {
+        cls: 'indicator-trend indicator-trend--neutral',
+        label: 'Neutral trend',
+        icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h13.2M13.2 8.8 20 12l-6.8 3.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      };
+    }
+
     function fmtIndicator(value) {
       var numValue = Number(value);
       if (!isFinite(numValue)) return 'n/a';
@@ -1336,18 +1449,88 @@
       return numValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits });
     }
 
-    function row(label, primary, secondary, status) {
-      return '<div class="indicator-row">' +
-        '<div class="indicator-row__label">' + escapeHtml(label) + '</div>' +
-        '<div class="indicator-row__value"><strong>' + escapeHtml(primary) + '</strong>' + (secondary ? '<small>' + escapeHtml(secondary) + '</small>' : '') + '</div>' +
-        '<span class="' + pillClass(status) + '">' + escapeHtml(status || 'Neutral') + '</span>' +
+    function techBlock(title, status, metrics, note, noteClass) {
+      var list = Array.isArray(metrics) ? metrics : [];
+      var count = list.length <= 1 ? 1 : (list.length === 2 ? 2 : 3);
+      var meta = note ? ('<span class="indicator-tech__meta' + (noteClass ? (' ' + escapeHtml(noteClass)) : '') + '">• ' + escapeHtml(note) + '</span>') : '';
+      return '<div class="indicator-tech">' +
+        '<div class="indicator-tech__head">' +
+          '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">' + escapeHtml(title) + '</div>' + meta + '</div>' +
+          '<span class="' + pillClass(status) + '">' + escapeHtml(status || 'Neutral') + '</span>' +
+        '</div>' +
+        '<div class="indicator-tech__metrics indicator-tech__metrics--' + count + '">' +
+          list.map(function (item) {
+            return '<div class="indicator-sr__metric indicator-tech__metric">' +
+              '<span>' + escapeHtml(item && item.label) + '</span>' +
+              '<strong>' + escapeHtml(item && item.value) + '</strong>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+      '</div>';
+    }
+
+    function fmtPctMaybe(value) {
+      var n = Number(value);
+      return isFinite(n) ? ui.pctText(n) : 'n/a';
+    }
+
+    function srBlock(tf) {
+      var values = tf && tf.values && tf.values.sr ? tf.values.sr : {};
+      var pivot = values.pivot || {};
+      var donchian = values.donchian || {};
+      var nearest = values.nearest || {};
+      var srStatus = tf && tf.statuses ? tf.statuses.sr : 'Neutral';
+      var channelWidthPct = (isFinite(Number(donchian.support)) && isFinite(Number(donchian.resistance)) && isFinite(Number(tf && tf.close)) && Number(tf.close) !== 0)
+        ? ((Number(donchian.resistance) - Number(donchian.support)) / Number(tf.close)) * 100
+        : NaN;
+      var supportClass = isFinite(Number(nearest.supportDistancePct)) && Number(nearest.supportDistancePct) <= 2.5
+        ? ' indicator-sr__nearest-card--near'
+        : '';
+      var resistanceClass = isFinite(Number(nearest.resistanceDistancePct)) && Number(nearest.resistanceDistancePct) <= 2.5
+        ? ' indicator-sr__nearest-card--near'
+        : '';
+      return '<div class="indicator-sr">' +
+        '<div class="indicator-sr__head">' +
+          '<div class="indicator-sr__title">Support &amp; Resistance</div>' +
+          '<span class="' + pillClass(srStatus) + '">' + escapeHtml(srStatus || 'Neutral') + '</span>' +
+        '</div>' +
+        '<div class="indicator-sr__nearest">' +
+          '<article class="indicator-sr__nearest-card indicator-sr__nearest-card--support' + supportClass + '">' +
+            '<span class="indicator-sr__kicker">Nearest Support</span>' +
+            '<strong>' + escapeHtml(fmtIndicator(nearest.support)) + '</strong>' +
+            '<small>' + escapeHtml(fmtPctMaybe(nearest.supportDistancePct)) + '</small>' +
+          '</article>' +
+          '<article class="indicator-sr__nearest-card indicator-sr__nearest-card--resistance' + resistanceClass + '">' +
+            '<span class="indicator-sr__kicker">Nearest Resistance</span>' +
+            '<strong>' + escapeHtml(fmtIndicator(nearest.resistance)) + '</strong>' +
+            '<small>' + escapeHtml(fmtPctMaybe(nearest.resistanceDistancePct)) + '</small>' +
+          '</article>' +
+        '</div>' +
+        '<div class="indicator-sr__pivot-grid">' +
+          '<div class="indicator-sr__metric indicator-sr__metric--s2"><span>S2</span><strong>' + escapeHtml(fmtIndicator(pivot.s2)) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-sr__metric--s1"><span>S1</span><strong>' + escapeHtml(fmtIndicator(pivot.s1)) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-sr__metric--p"><span>P</span><strong>' + escapeHtml(fmtIndicator(pivot.p)) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-sr__metric--r1"><span>R1</span><strong>' + escapeHtml(fmtIndicator(pivot.r1)) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-sr__metric--r2"><span>R2</span><strong>' + escapeHtml(fmtIndicator(pivot.r2)) + '</strong></div>' +
+        '</div>' +
+        '<div class="indicator-sr__donchian">' +
+          '<div class="indicator-sr__donchian-head">' +
+            '<span>Donchian Channel</span>' +
+            '<small>Width ' + escapeHtml(fmtPctMaybe(channelWidthPct)) + '</small>' +
+          '</div>' +
+          '<div class="indicator-sr__donchian-grid">' +
+            '<div class="indicator-sr__metric indicator-sr__metric--support"><span>Support</span><strong>' + escapeHtml(fmtIndicator(donchian.support)) + '</strong></div>' +
+            '<div class="indicator-sr__metric"><span>Mid</span><strong>' + escapeHtml(fmtIndicator(donchian.midpoint)) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-sr__metric--resistance"><span>Resistance</span><strong>' + escapeHtml(fmtIndicator(donchian.resistance)) + '</strong></div>' +
+          '</div>' +
+        '</div>' +
       '</div>';
     }
 
     targetEls.assetLabel.textContent = assetLabel;
     if (targetEls.modeLabel) targetEls.modeLabel.textContent = modeLabelText || (mode === 'crypto' ? 'Crypto' : 'Stocks');
     targetEls.meta.textContent = metaText;
-    targetEls.overallPill.className = pillClass(overall);
+    targetEls.overallPill.className = pillClass(overall) + ' indicator-pill--overall';
     targetEls.overallPill.textContent = overall;
 
     targetEls.timeframes.innerHTML = ['1d', '1w', '1m'].map(function (key) {
@@ -1356,13 +1539,47 @@
       hasRows = true;
       var values = tf.values || {};
       var statuses = tf.statuses || {};
+      var trend = trendMeta(tf.overall);
+      var closeValue = Number(tf.close);
+      var ema20Value = Number(values.ema20);
+      var ema50Value = Number(values.ema50);
+      var emaSignal = '▽ Below EMA20';
+      var emaSignalClass = 'indicator-tech__note--neutral';
+      if (isFinite(closeValue) && isFinite(ema20Value) && isFinite(ema50Value)) {
+        if (closeValue > ema20Value) {
+          emaSignal = '▲ Strong above EMA20';
+          emaSignalClass = 'indicator-tech__note--up';
+        } else if (closeValue < ema50Value) {
+          emaSignal = '▽ Closed below EMA50';
+          emaSignalClass = 'indicator-tech__note--down';
+        } else {
+          emaSignal = '▽ Below EMA20';
+          emaSignalClass = 'indicator-tech__note--neutral';
+        }
+      }
       return '<section class="indicator-card">' +
-        '<div class="indicator-card__head"><h4>' + escapeHtml(String(key).toUpperCase()) + '</h4><span class="' + pillClass(tf.overall) + '">' + escapeHtml(tf.overall || 'Neutral') + '</span></div>' +
+        '<div class="indicator-card__head"><h4>' + escapeHtml(String(key).toUpperCase()) + '</h4><span class="' + escapeHtml(trend.cls) + '" title="' + escapeHtml(trend.label) + '" aria-label="' + escapeHtml(trend.label) + '">' + trend.icon + '</span><span class="' + pillClass(tf.overall) + '">' + escapeHtml(tf.overall || 'Neutral') + '</span></div>' +
         '<div class="indicator-card__rows">' +
-          row('EMA Trend', 'EMA20 ' + fmtIndicator(values.ema20) + ' | EMA50 ' + fmtIndicator(values.ema50), 'Close ' + fmtIndicator(tf.close), statuses.ema) +
-          row('RSI 14', fmtIndicator(values.rsi14), 'Wilder smoothing', statuses.rsi) +
-          row('MACD', 'Line ' + fmtIndicator(values.macdLine) + ' | Signal ' + fmtIndicator(values.macdSignal), 'Hist ' + fmtIndicator(values.macdHistogram), statuses.macd) +
-          row('Bollinger', 'Mid ' + fmtIndicator(values.bbMiddle) + ' | Up ' + fmtIndicator(values.bbUpper), 'Low ' + fmtIndicator(values.bbLower) + ' | ' + String(values.bollingerPosition || 'n/a'), statuses.bollinger) +
+          techBlock('EMA Trend', statuses.ema, [
+            { label: 'EMA20', value: fmtIndicator(values.ema20) },
+            { label: 'EMA50', value: fmtIndicator(values.ema50) },
+            { label: 'Close', value: fmtIndicator(tf.close) }
+          ], emaSignal, emaSignalClass) +
+          techBlock('RSI 14', statuses.rsi, [
+            { label: 'RSI', value: fmtIndicator(values.rsi14) },
+            { label: 'Period', value: '14' }
+          ], 'Wilder smoothing') +
+          techBlock('MACD', statuses.macd, [
+            { label: 'Line', value: fmtIndicator(values.macdLine) },
+            { label: 'Signal', value: fmtIndicator(values.macdSignal) },
+            { label: 'Hist', value: fmtIndicator(values.macdHistogram) }
+          ]) +
+          techBlock('Bollinger', statuses.bollinger, [
+            { label: 'Mid', value: fmtIndicator(values.bbMiddle) },
+            { label: 'Upper', value: fmtIndicator(values.bbUpper) },
+            { label: 'Lower', value: fmtIndicator(values.bbLower) }
+          ], String(values.bollingerPosition || 'n/a')) +
+          srBlock(tf) +
         '</div>' +
         '<div class="indicator-note">Score: ' + escapeHtml(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
       '</section>';
@@ -1370,6 +1587,34 @@
 
     if (!hasRows) {
       targetEls.timeframes.innerHTML = '<section class="indicator-card"><div class="muted">No indicator snapshot yet.</div></section>';
+    }
+  }
+
+  function syncMobilePanelOrder() {
+    if (!ui || !ui.el) return;
+    var layoutEl = document.querySelector('.layout');
+    var sidePanelEl = ui.el.detailPanel;
+    var indicatorsEl = ui.el.indicatorsPanel;
+    if (!layoutEl || !sidePanelEl || !indicatorsEl) return;
+    var isMobileLayout = window.matchMedia('(max-width: 1120px)').matches;
+    var marketSectionEl = ui.el.marketDataGrid ? ui.el.marketDataGrid.closest('.panel-block') : null;
+    var eventsSectionEl = ui.el.eventsList ? ui.el.eventsList.closest('.panel-block') : null;
+
+    if (eventsSectionEl) {
+      eventsSectionEl.classList.toggle('hidden', !!isMobileLayout);
+    }
+
+    if (isMobileLayout) {
+      if (indicatorsEl.parentElement !== sidePanelEl && marketSectionEl) {
+        sidePanelEl.insertBefore(indicatorsEl, marketSectionEl.nextSibling);
+      }
+      indicatorsEl.classList.add('indicators-panel--embedded-mobile');
+      return;
+    }
+
+    indicatorsEl.classList.remove('indicators-panel--embedded-mobile');
+    if (indicatorsEl.parentElement !== layoutEl) {
+      layoutEl.insertBefore(indicatorsEl, sidePanelEl.nextSibling);
     }
   }
 
@@ -1413,6 +1658,7 @@
       metaText: buildIndicatorPanelMeta(state.app.mode, {}),
       timeframes: {}
     });
+    syncMobilePanelOrder();
     renderBtcDominancePanel();
     syncCryptoParticles();
     persist();
@@ -3135,9 +3381,13 @@
 
   function handlePortfolioListClick(event) {
     var row = event.target.closest('.asset-row');
-    if (!row) return;
+    var shell = row ? row.closest('.asset-row-shell') : event.target.closest('.asset-row-shell');
+    if (!row && !shell) return;
     if (event.target.closest('.js-action-menu-toggle')) return;
-    var key = row.dataset.key;
+    var tappedDayMove = !!event.target.closest('.asset-row__daymove');
+    var shouldScrollToChart = tappedDayMove && window.matchMedia('(max-width: 1120px)').matches;
+    var key = (row && row.dataset && row.dataset.key) || (shell && shell.dataset && shell.dataset.key);
+    if (!key) return;
     var modeItems = getRawModeItems(state.app.mode);
     var asset = modeItems.find(function (a) { return assetKey(a) === key; });
     if (!asset) return;
@@ -3170,11 +3420,26 @@
       includeNewsOnSelect = true;
     }
     renderAll();
+    if (shouldScrollToChart) {
+      scrollToDetailChartOnMobile();
+    }
     refreshAssetData(asset, includeNewsOnSelect, { onSelect: true });
     refreshIndicatorsForMode(state.app.mode).then(function () {
       renderAll();
     }).catch(function () {
       renderAll();
+    });
+  }
+
+  function scrollToDetailChartOnMobile() {
+    if (!ui || !ui.el) return;
+    var anchor = ui.el.detailTitle ? ui.el.detailTitle.closest('.section-header') : null;
+    if (!anchor && ui.el.assetChart) {
+      anchor = ui.el.assetChart.closest('.chart-wrap') || ui.el.assetChart;
+    }
+    if (!anchor) return;
+    requestAnimationFrame(function () {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
@@ -3543,6 +3808,7 @@
       }
       if (!ui.el.modal.classList.contains('hidden')) closeModal();
     });
+    window.addEventListener('resize', syncMobilePanelOrder);
   }
 
   function normalizeImportedAssets() {
