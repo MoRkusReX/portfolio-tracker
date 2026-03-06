@@ -29,6 +29,9 @@
 
   var CRYPTO_THRESHOLDS = {
     marketCapLiquidityMin: 0.01,
+    marketCapMicroMax: 10_000_000,
+    marketCapSmallMax: 100_000_000,
+    marketCapMidMax: 1_000_000_000,
     fdvCloseRatioMax: 1.5,
     fdvHighRiskRatioMin: 3,
     supplyRatioHealthyMin: 0.6,
@@ -96,6 +99,45 @@
     if (n >= 2) return 'Healthy';
     if (n >= 1) return 'Mixed';
     return 'Weak Token Fundamentals';
+  }
+
+  // Classifies crypto market cap into size band + UI status tone.
+  function interpretCryptoMarketCap(marketCap, thresholds) {
+    var t = Object.assign({}, CRYPTO_THRESHOLDS, thresholds || {});
+    var mcap = num(marketCap);
+    if (mcap == null || mcap <= 0) {
+      return {
+        band: 'Unknown',
+        status: 'Neutral',
+        reason: 'Market cap unavailable'
+      };
+    }
+    if (mcap < t.marketCapMicroMax) {
+      return {
+        band: 'Micro cap',
+        status: 'Risk',
+        reason: 'Very small market cap'
+      };
+    }
+    if (mcap < t.marketCapSmallMax) {
+      return {
+        band: 'Small cap',
+        status: 'Neutral',
+        reason: 'Smaller market cap'
+      };
+    }
+    if (mcap < t.marketCapMidMax) {
+      return {
+        band: 'Mid cap',
+        status: 'Healthy',
+        reason: 'Established market cap'
+      };
+    }
+    return {
+      band: 'Large cap',
+      status: 'Bullish',
+      reason: 'Large market cap'
+    };
   }
 
   // Classifies a valuation multiple into Cheap/Fair/Expensive with a numeric score.
@@ -368,6 +410,7 @@
     isFresh: isFresh,
     interpretValuation: interpretValuation,
     interpretDilutionRisk: interpretDilutionRisk,
+    interpretCryptoMarketCap: interpretCryptoMarketCap,
     computeStockQualityScore: computeStockQualityScore,
     computeStockValuationScore: computeStockValuationScore,
     computeStockFAScore: computeStockFAScore,

@@ -585,6 +585,7 @@ function buildCryptoPanel(coinId, symbol, components, warnings) {
   const volume24h = num(market.total_volume);
   const fees24h = num(protocol.fees24h);
   const revenue24h = num(protocol.revenue24h);
+  const marketCapMeta = FundamentalsEngine.interpretCryptoMarketCap(marketCap);
   const dilution = FundamentalsEngine.interpretDilutionRisk(marketCap, fdv, circulatingSupply, maxSupply);
   const scoreResult = FundamentalsEngine.computeCryptoFAScore({
     marketCap,
@@ -603,7 +604,7 @@ function buildCryptoPanel(coinId, symbol, components, warnings) {
   const valuationSummaryText = dilution.label + (ratioFdvToMcap != null ? (' • FDV/MCap ' + fmtRatio(ratioFdvToMcap, 2) + 'x') : '');
 
   const marketMetrics = [
-    metricItem('market-cap', 'Market Cap', marketCap, fmtCompactCurrency(marketCap), marketCap != null ? 'Healthy' : 'Neutral', 'CoinGecko market cap'),
+    metricItem('market-cap', 'Market Cap', marketCap, fmtCompactCurrency(marketCap), marketCapMeta.status, 'CoinGecko market cap • ' + marketCapMeta.band),
     metricItem('fdv', 'FDV', fdv, fmtCompactCurrency(fdv), ratioFdvToMcap == null ? 'Neutral' : (ratioFdvToMcap <= 1.5 ? 'Healthy' : (ratioFdvToMcap >= 3 ? 'Risk' : 'Neutral')), 'Fully diluted valuation'),
     metricItem('volume-24h', '24h Volume', volume24h, fmtCompactCurrency(volume24h), ratioVolumeToMcap == null ? 'Neutral' : (ratioVolumeToMcap >= 0.08 ? 'Bullish' : (ratioVolumeToMcap <= 0.005 ? 'Risk' : 'Neutral')), 'Liquidity proxy'),
     metricItem('fdv-vs-mcap', 'FDV vs Market Cap', ratioFdvToMcap, ratioFdvToMcap == null ? 'n/a' : `${fmtRatio(ratioFdvToMcap, 2)}x`, dilution.label.indexOf('Low') >= 0 ? 'Healthy' : (dilution.label.indexOf('High') >= 0 ? 'Risk' : 'Neutral'), dilution.label)

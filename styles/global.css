@@ -278,16 +278,80 @@ html[data-layout="wide"] .layout {
     grid-template-columns: minmax(0, 1.6fr) minmax(500px, 1.12fr) minmax(340px, 0.82fr) minmax(340px, 0.82fr);
     margin-left: 0;
   }
+
+  #fundamentalsPanel {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  #newsPanel {
+    grid-column: 4;
+    grid-row: 2;
+  }
+}
+
+@media (min-width: 1700px) {
+  .app-shell {
+    max-width: 2100px;
+  }
+
+  html[data-layout="wide"] .app-shell {
+    max-width: min(3200px, 98vw);
+  }
+
+  .layout {
+    grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.88fr) minmax(300px, 0.72fr) minmax(300px, 0.72fr) minmax(300px, 0.72fr);
+  }
+
+  html[data-layout="wide"] .layout {
+    grid-template-columns: minmax(0, 1.6fr) minmax(500px, 1.12fr) minmax(340px, 0.82fr) minmax(340px, 0.82fr) minmax(340px, 0.82fr);
+  }
+
+  #fundamentalsPanel {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  #newsPanel {
+    grid-column: 5;
+    grid-row: 1;
+  }
 }
 
 html[data-layout="wide"] .portfolio-grid {
   grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.8fr);
 }
 
+@media (min-width: 1121px) {
+  #detailPanel {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-auto-rows: min-content;
+    align-content: start;
+    gap: 0.8rem;
+  }
+
+  #detailPanel > .section-header,
+  #detailPanel > .detail-meta,
+  #detailPanel > .chart-timeframes,
+  #detailPanel > .chart-wrap--line {
+    grid-column: 1 / -1;
+  }
+
+  #detailPanel > #marketDataBlock {
+    grid-column: 1;
+    align-self: stretch;
+  }
+
+  #detailPanel > #linksSocialsBlock {
+    grid-column: 2;
+  }
+}
+
 @media (min-width: 1500px) {
   html[data-layout="wide"] .side-panel {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
     grid-auto-rows: min-content;
     align-content: start;
     gap: 0.8rem;
@@ -297,12 +361,13 @@ html[data-layout="wide"] .portfolio-grid {
 
   html[data-layout="wide"] .side-panel > .section-header,
   html[data-layout="wide"] .side-panel > .detail-meta,
+  html[data-layout="wide"] .side-panel > .chart-timeframes,
   html[data-layout="wide"] .side-panel > .chart-wrap--line {
     grid-column: 1 / -1;
   }
 
   html[data-layout="wide"] .side-panel > .chart-wrap--line {
-    height: 220px;
+    height: 252px;
   }
 
   html[data-layout="wide"] .side-panel > .panel-block {
@@ -320,6 +385,20 @@ html[data-layout="wide"] .portfolio-grid {
   html[data-layout="wide"] .side-panel .twitter-placeholder {
     min-height: 110px;
   }
+
+  html[data-layout="wide"] #marketDataBlock {
+    grid-column: 1;
+    align-self: stretch;
+  }
+
+  html[data-layout="wide"] #marketDataGrid.mini-grid {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-layout="wide"] #linksSocialsBlock {
+    grid-column: 2;
+  }
+
 }
 
 .glass {

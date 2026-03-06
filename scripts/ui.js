@@ -159,6 +159,7 @@
         detailChartTimeframes: qs('detailChartTimeframes'),
         externalLink: qs('externalLink'),
         marketDataGrid: qs('marketDataGrid'),
+        newsPanel: qs('newsPanel'),
         fundamentalsPanel: qs('fundamentalsPanel'),
         fundamentalsAssetLabel: qs('fundamentalsAssetLabel'),
         fundamentalsTitle: qs('fundamentalsTitle'),
@@ -499,20 +500,24 @@
       if (!this.el.sortSelect) return;
       this.el.sortSelect.value = value || 'az';
     },
-    setNewsScopeToggle: function (mode, scope, hasSelectedStock) {
+    setNewsScopeToggle: function (mode, scope, hasSelectedStock, selectedStockLabel) {
       if (!this.el.newsScopeToggle || !this.el.newsScopeGeneralBtn || !this.el.newsScopeSelectedBtn) return;
       var isStocks = mode === 'stocks';
       this.el.newsScopeToggle.classList.toggle('hidden', !isStocks);
       if (!isStocks) return;
       var useSelected = scope === 'selected';
+      var selectedLabel = String(selectedStockLabel || '').trim();
+      if (!selectedLabel) selectedLabel = 'Selected';
       this.el.newsScopeGeneralBtn.classList.toggle('btn--primary', !useSelected);
       this.el.newsScopeGeneralBtn.classList.toggle('btn--ghost', useSelected);
       this.el.newsScopeSelectedBtn.classList.toggle('btn--primary', useSelected);
       this.el.newsScopeSelectedBtn.classList.toggle('btn--ghost', !useSelected);
       this.el.newsScopeGeneralBtn.setAttribute('aria-pressed', useSelected ? 'false' : 'true');
       this.el.newsScopeSelectedBtn.setAttribute('aria-pressed', useSelected ? 'true' : 'false');
+      this.el.newsScopeSelectedBtn.textContent = hasSelectedStock ? selectedLabel : 'Selected';
       this.el.newsScopeSelectedBtn.disabled = !hasSelectedStock;
-      this.el.newsScopeSelectedBtn.title = hasSelectedStock ? 'Show news for selected stock' : 'Select a stock first';
+      this.el.newsScopeSelectedBtn.title = hasSelectedStock ? ('Show news for ' + selectedLabel) : 'Select a stock first';
+      this.el.newsScopeSelectedBtn.setAttribute('aria-label', hasSelectedStock ? ('Show news for ' + selectedLabel) : 'Show news for selected stock');
     },
     setConnectionModeBadge: function () {
       if (!this.el.connectionModeBadge) return;
@@ -721,11 +726,18 @@
         return;
       }
       var entries = [];
+      var fetchedAtText = (data && isFinite(Number(data.fetchedAt)))
+        ? new Date(Number(data.fetchedAt)).toLocaleString()
+        : 'n/a';
+      var sourceStamp = (((data && data.date) || '') + ' ' + ((data && data.time) || '')).trim();
+      if (!sourceStamp && data && data.source) {
+        var sourceText = String(data.source || '').trim();
+        if (/coingecko/i.test(sourceText)) sourceStamp = 'CoinGecko';
+        else if (/stooq/i.test(sourceText)) sourceStamp = 'Stooq';
+        else if (/yahoo/i.test(sourceText)) sourceStamp = 'Yahoo';
+        else sourceStamp = sourceText;
+      }
       if (asset.type === 'stock') {
-        var fetchedAtText = (data && isFinite(Number(data.fetchedAt)))
-          ? new Date(Number(data.fetchedAt)).toLocaleString()
-          : 'n/a';
-        var sourceStamp = (((data && data.date) || '') + ' ' + ((data && data.time) || '')).trim();
         var sessionClass = (data && data.marketIsOpen) ? 'market-status--open' : 'market-status--closed';
         var countdownClass = 'market-status--closed';
         if (data && data.marketIsOpen) {
@@ -738,15 +750,15 @@
           ['Session', (data && data.marketSessionLabel) || 'n/a', sessionClass],
           ['Countdown', (data && data.marketCountdownLabel) || 'n/a', countdownClass],
           ['Price', fmtCurrency(data && data.price)],
-          ['Open', fmtCurrency(data && data.open)],
-          ['High', fmtCurrency(data && data.high)],
-          ['Low', fmtCurrency(data && data.low)],
           ['Volume', fmtCompactNumber(data && data.volume)],
+          ['Open', fmtCurrency(data && data.open)],
+          ['Low', fmtCurrency(data && data.low)],
+          ['High', fmtCurrency(data && data.high)],
           ['Last fetched', fetchedAtText],
           ['Source stamp', sourceStamp || 'n/a']
         ];
         if (data && isFinite(Number(data.preMarketPrice))) {
-          entries.splice(4, 0,
+          entries.splice(6, 0,
             ['Pre-Mkt', fmtCurrency(data.preMarketPrice)],
             ['Pre-Mkt %', isFinite(Number(data.preMarketChangePercent)) ? pctText(Number(data.preMarketChangePercent)) : 'n/a']
           );
@@ -758,7 +770,9 @@
           ['Mkt Cap', fmtCompactCurrency(data && data.marketCap)],
           ['24h Vol', fmtCompactCurrency(data && data.volume24h)],
           ['Coin ID', asset.coinId || 'n/a'],
-          ['Source', 'CoinGecko']
+          ['Source', 'CoinGecko'],
+          ['Last fetched', fetchedAtText],
+          ['Source stamp', sourceStamp || 'CoinGecko']
         ];
       }
       function slugLabel(text) {
@@ -1302,19 +1316,24 @@
         '</div>';
       }
 
+      function emaPositionPillClass(label) {
+        var v = String(label || 'Neutral').toLowerCase();
+        if (v === 'strong bullish') return 'indicator-pill--bullish';
+        if (v === 'bearish risk') return 'indicator-pill--bearish';
+        if (v === 'pullback') return 'indicator-pill--pullback';
+        if (v === 'trend test') return 'indicator-pill--test';
+        return 'indicator-pill--neutral';
+      }
+
       function emaPositionBlock(tf) {
         var ep = (tf && tf.emaPosition) || (tf && tf.values && tf.values.emaPosition) || {};
         var label = String(ep.label || 'Neutral');
         var relation = String(ep.relation || '');
-        var toneClass = 'indicator-ema-position__badge--neutral';
-        if (label === 'Strong Bullish') toneClass = 'indicator-ema-position__badge--bullish';
-        else if (label === 'Pullback') toneClass = 'indicator-ema-position__badge--pullback';
-        else if (label === 'Trend Test') toneClass = 'indicator-ema-position__badge--test';
-        else if (label === 'Bearish Risk') toneClass = 'indicator-ema-position__badge--bearish';
+        var toneClass = emaPositionPillClass(label);
         return '<div class="indicator-tech indicator-tech--ema-position">' +
           '<div class="indicator-tech__head">' +
             '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">EMA Position</div>' + (relation ? '<span class="indicator-tech__meta">• ' + esc(relation) + '</span>' : '') + '</div>' +
-            '<span class="indicator-ema-position__badge ' + toneClass + '">' + esc(label) + '</span>' +
+            '<span class="indicator-pill indicator-ema-position__badge ' + toneClass + '">' + esc(label) + '</span>' +
           '</div>' +
           '<div class="indicator-tech__metrics indicator-tech__metrics--3 indicator-ema-position__values">' +
             '<div class="indicator-sr__metric indicator-tech__metric"><span>Close</span><strong>' + esc(fmtIndicator(ep.close)) + '</strong></div>' +

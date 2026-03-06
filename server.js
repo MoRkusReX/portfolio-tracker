@@ -46,6 +46,10 @@ const TWELVEDATA_API_KEY = String(process.env.TWELVEDATA_API_KEY || '').trim();
 const COINMARKETCAP_API_KEY = String(process.env.COINMARKETCAP_API_KEY || '').trim();
 // Holds the Financial Modeling Prep API key for stock fundamentals requests.
 const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
+// Holds the Marketaux API key for server-side stock news requests.
+const MARKETAUX_API_KEY = String(process.env.MARKETAUX_API_KEY || '').trim();
+// Holds the Alpha Vantage API key for server-side stock news requests.
+const ALPHAVANTAGE_API_KEY = String(process.env.ALPHAVANTAGE_API_KEY || '').trim();
 // Chooses the Python interpreter used for the SQLite bridge helper.
 const PYTHON_BIN = String(process.env.PYTHON_BIN || 'python3').trim() || 'python3';
 // Resolves the on-disk SQLite database location.
@@ -59,6 +63,9 @@ const INDICATOR_POLICY = {
   '1month': { warmup: 120, incremental: 5, maxCandles: 160, bucket: 'month' }
 };
 const INDICATOR_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
+const NEWS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 7;
+const NEWS_CACHE_PRUNE_MIN_INTERVAL_MS = 1000 * 60 * 5;
+let newsCachePruneState = { lastRunAt: 0, running: null };
 
 app.use(cors({ origin: true, methods: ['GET', 'PUT', 'OPTIONS'] }));
 app.use(express.json({ limit: '1mb' }));
@@ -584,9 +591,29 @@ function dbChartStateKey(rawKey) {
   return `chart:${key}`;
 }
 
+// Removes stale news snapshots from SQLite no more than once per interval window.
+async function pruneStaleNewsCache() {
+  const now = Date.now();
+  if (newsCachePruneState.running) return newsCachePruneState.running;
+  if (now - Number(newsCachePruneState.lastRunAt || 0) < NEWS_CACHE_PRUNE_MIN_INTERVAL_MS) return null;
+  newsCachePruneState.running = runDb('prune_stale_state_prefix', ['news:', String(NEWS_CACHE_RETENTION_MS)])
+    .then(() => {
+      newsCachePruneState.lastRunAt = Date.now();
+    })
+    .catch((err) => {
+      console.warn('Failed to prune stale news cache:', err && err.message ? err.message : err);
+      newsCachePruneState.lastRunAt = Date.now();
+    })
+    .finally(() => {
+      newsCachePruneState.running = null;
+    });
+  return newsCachePruneState.running;
+}
+
 // Reads the latest persisted news payload for a given cache key.
 app.get('/api/news-cache', async (req, res) => {
   try {
+    await pruneStaleNewsCache();
     const key = String(req.query.key || '').trim();
     const stateKey = dbNewsStateKey(key);
     if (!stateKey) {
@@ -614,6 +641,7 @@ app.get('/api/news-cache', async (req, res) => {
 // Persists the latest fetched news payload for a given cache key.
 app.put('/api/news-cache', async (req, res) => {
   try {
+    await pruneStaleNewsCache();
     const key = String(req.body && req.body.key || '').trim();
     const stateKey = dbNewsStateKey(key);
     if (!stateKey) {
@@ -638,6 +666,100 @@ app.put('/api/news-cache', async (req, res) => {
     return res.status(500).json({
       error: 'news_cache_write_failed',
       detail: String(err && err.message || 'Failed to save news cache').slice(0, 240)
+    });
+  }
+});
+
+// Proxies Marketaux stock news using a server-held API key.
+app.get('/api/news/marketaux', async (req, res) => {
+  try {
+    if (!MARKETAUX_API_KEY) {
+      return res.status(500).json({ error: 'marketaux_key_missing' });
+    }
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    const query = String(req.query.query || '').trim();
+    const general = String(req.query.general || '0') === '1' || !symbol;
+    const params = new URLSearchParams();
+    params.set('api_token', MARKETAUX_API_KEY);
+    params.set('language', 'en');
+    params.set('limit', '20');
+    params.set('sort', 'published_desc');
+    params.set('filter_entities', 'true');
+    if (query) {
+      params.set('keywords', query);
+    } else if (general) {
+      params.set('keywords', 'stock market');
+    } else {
+      params.set('symbols', symbol);
+    }
+    const url = `https://api.marketaux.com/v1/news/all?${params.toString()}`;
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
+      validateStatus: () => true
+    });
+    if (response.status !== 200) {
+      const detail = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      return res.status(response.status === 429 ? 429 : 500).json({
+        error: response.status === 429 ? 'marketaux_rate_limited' : 'marketaux_failed',
+        detail: String(detail || 'Marketaux request failed').slice(0, 240)
+      });
+    }
+    return res.json(response.data || {});
+  } catch (err) {
+    return res.status(500).json({
+      error: 'marketaux_failed',
+      detail: String(err && err.message || 'Marketaux proxy failed').slice(0, 240)
+    });
+  }
+});
+
+// Proxies Alpha Vantage NEWS_SENTIMENT responses using a server-held API key.
+app.get('/api/news/alphavantage', async (req, res) => {
+  try {
+    if (!ALPHAVANTAGE_API_KEY) {
+      return res.status(500).json({ error: 'alphavantage_key_missing' });
+    }
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    const general = String(req.query.general || '0') === '1' || !symbol;
+    const params = new URLSearchParams();
+    params.set('function', 'NEWS_SENTIMENT');
+    params.set('sort', 'LATEST');
+    params.set('limit', '20');
+    params.set('apikey', ALPHAVANTAGE_API_KEY);
+    if (general) params.set('topics', 'financial_markets');
+    else params.set('tickers', symbol);
+    const url = `https://www.alphavantage.co/query?${params.toString()}`;
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
+      validateStatus: () => true
+    });
+    if (response.status !== 200) {
+      const detail = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      return res.status(response.status === 429 ? 429 : 500).json({
+        error: response.status === 429 ? 'alphavantage_rate_limited' : 'alphavantage_failed',
+        detail: String(detail || 'Alpha Vantage request failed').slice(0, 240)
+      });
+    }
+    const payload = response.data || {};
+    if (payload['Error Message']) {
+      return res.status(400).json({
+        error: 'alphavantage_failed',
+        detail: String(payload['Error Message']).slice(0, 240)
+      });
+    }
+    if (payload.Note || payload.Information) {
+      return res.status(429).json({
+        error: 'alphavantage_rate_limited',
+        detail: String(payload.Note || payload.Information).slice(0, 240)
+      });
+    }
+    return res.json(payload);
+  } catch (err) {
+    return res.status(500).json({
+      error: 'alphavantage_failed',
+      detail: String(err && err.message || 'Alpha Vantage proxy failed').slice(0, 240)
     });
   }
 });

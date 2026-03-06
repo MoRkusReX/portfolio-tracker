@@ -299,6 +299,24 @@ def prune_stale_indicators(conn, max_age_ms):
     return {"ok": True, "deleted": int(cur.rowcount or 0)}
 
 
+# Deletes app_state rows under a key prefix when they are older than max_age_ms.
+def prune_stale_state_prefix(conn, prefix, max_age_ms):
+    safe_prefix = str(prefix or "").strip()
+    if not safe_prefix:
+        fail("Missing state prefix")
+    cutoff = utc_now_ms() - max(0, int(max_age_ms))
+    cur = conn.execute(
+        """
+        DELETE FROM app_state
+        WHERE state_key LIKE ?
+          AND updated_at < ?
+        """,
+        (safe_prefix + "%", cutoff),
+    )
+    conn.commit()
+    return {"ok": True, "deleted": int(cur.rowcount or 0)}
+
+
 # Dispatches command-line requests to the appropriate SQLite helper action.
 def main():
     if len(sys.argv) < 3:
@@ -331,6 +349,10 @@ def main():
             if len(sys.argv) < 4:
                 fail("Missing max age")
             out = prune_stale_indicators(conn, int(sys.argv[3]))
+        elif command == "prune_stale_state_prefix":
+            if len(sys.argv) < 5:
+                fail("Missing state prefix or max age")
+            out = prune_stale_state_prefix(conn, sys.argv[3], int(sys.argv[4]))
         else:
             fail("Unsupported command")
         print(json.dumps(out))

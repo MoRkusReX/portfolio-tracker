@@ -1075,7 +1075,7 @@
         : (savedSettings.apiSourcePrefs || state.app.apiSourcePrefs);
       state.app.newsScopeStocks = savedSettings.newsScopeStocks === 'selected' ? 'selected' : 'general';
       state.app.sortBy = savedSettings.sortBy || 'az';
-      state.app.newsSourceStocks = savedSettings.newsSourceStocks || 'auto';
+      state.app.newsSourceStocks = savedSettings.newsSourceStocks || 'marketaux';
       state.app.newsSourceCrypto = savedSettings.newsSourceCrypto || 'auto';
       state.app.detailChartTimeframeStocks = savedSettings.detailChartTimeframeStocks || '1M';
       state.app.detailChartTimeframeCrypto = savedSettings.detailChartTimeframeCrypto || '1M';
@@ -1194,14 +1194,123 @@
     return code.replace(/_/g, ' ');
   }
 
+  // Detects old crypto FA snapshots that predate market-cap band classification.
+  function cryptoFundamentalsNeedsMarketCapRefresh(snapshot) {
+    var panel = snapshot && snapshot.panel;
+    var sections = panel && Array.isArray(panel.sections) ? panel.sections : [];
+    if (!sections.length) return false;
+    var marketSection = null;
+    for (var i = 0; i < sections.length; i++) {
+      if (String(sections[i] && sections[i].id || '') === 'market') {
+        marketSection = sections[i];
+        break;
+      }
+    }
+    if (!marketSection) return false;
+    var metrics = Array.isArray(marketSection.metrics) ? marketSection.metrics : [];
+    var marketCapMetric = null;
+    for (var j = 0; j < metrics.length; j++) {
+      if (String(metrics[j] && metrics[j].id || '') === 'market-cap') {
+        marketCapMetric = metrics[j];
+        break;
+      }
+    }
+    if (!marketCapMetric) return false;
+    var hint = String(marketCapMetric.hint || '');
+    var status = String(marketCapMetric.status || '');
+    var value = Number(marketCapMetric.value);
+    // New snapshots include the size-band hint ("• Micro cap" etc).
+    if (hint.indexOf('•') < 0) return true;
+    // Guard stale classification explicitly for micro-cap values.
+    if (isFinite(value) && value > 0 && value < 10000000 && /healthy/i.test(status)) return true;
+    return false;
+  }
+
   function newsCacheKeyForAsset(asset) {
-    var source = asset.type === 'crypto' ? (state.app.newsSourceCrypto || 'auto') : (state.app.newsSourceStocks || 'auto');
+    var source = asset.type === 'crypto' ? (state.app.newsSourceCrypto || 'auto') : (state.app.newsSourceStocks || 'marketaux');
     return 'news:' + source + ':' + asset.type + ':' + (asset.coinId || asset.symbol);
   }
 
   function newsCacheKeyForGeneralStocks() {
-    var source = state.app.newsSourceStocks || 'auto';
+    var source = state.app.newsSourceStocks || 'marketaux';
     return 'news:' + source + ':stock:general';
+  }
+
+  function orderedNewsSourcesForMode(mode) {
+    var assetType = mode === 'crypto' ? 'crypto' : 'stock';
+    if (window.PT && window.PT.ApiSources && typeof window.PT.ApiSources.getOrdered === 'function') {
+      return (window.PT.ApiSources.getOrdered('news', assetType, state.app.apiSourcePrefs) || []).slice();
+    }
+    return assetType === 'crypto'
+      ? ['yahoo', 'tickertick', 'cryptopanic']
+      : ['marketaux', 'yahoo', 'tickertick', 'alphavantage'];
+  }
+
+  function syncNewsSourceSelectForMode(mode) {
+    var safeMode = mode === 'crypto' ? 'crypto' : 'stocks';
+    var allowed = orderedNewsSourcesForMode(safeMode);
+    var preferred = safeMode === 'crypto'
+      ? String(state.app.newsSourceCrypto || 'auto').toLowerCase()
+      : String(state.app.newsSourceStocks || 'marketaux').toLowerCase();
+
+    if (preferred !== 'auto' && allowed.indexOf(preferred) < 0) {
+      preferred = allowed[0] || 'auto';
+      if (safeMode === 'crypto') state.app.newsSourceCrypto = preferred;
+      else state.app.newsSourceStocks = preferred;
+    }
+
+    if (ui && ui.el && ui.el.newsSourceSelect && ui.el.newsSourceSelect.options) {
+      Array.prototype.forEach.call(ui.el.newsSourceSelect.options, function (option) {
+        var value = String(option && option.value || '').toLowerCase();
+        var visible = value === 'auto' || allowed.indexOf(value) >= 0;
+        option.hidden = !visible;
+        option.disabled = !visible;
+      });
+      var selected = preferred || 'auto';
+      if (selected !== 'auto' && allowed.indexOf(selected) < 0) selected = allowed[0] || 'auto';
+      ui.el.newsSourceSelect.value = selected;
+      return selected;
+    }
+
+    if (ui && typeof ui.setNewsSourceValue === 'function') {
+      ui.setNewsSourceValue(preferred || 'auto');
+    }
+    return preferred || 'auto';
+  }
+
+  function escapeRegex(text) {
+    return String(text == null ? '' : text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function newestCachedByRegex(regex, maxAgeMs) {
+    var caches = state.caches || {};
+    var bestData = null;
+    var bestTs = 0;
+    Object.keys(caches).forEach(function (key) {
+      if (!regex.test(String(key || ''))) return;
+      var entry = caches[key];
+      if (!entry || !Array.isArray(entry.data) || !entry.data.length) return;
+      var ts = Number(entry.ts || 0) || 0;
+      if (maxAgeMs && (!ts || (Date.now() - ts > maxAgeMs))) return;
+      if (ts >= bestTs) {
+        bestTs = ts;
+        bestData = entry.data;
+      }
+    });
+    return bestData;
+  }
+
+  function anySourceNewsCacheForAsset(asset, maxAgeMs) {
+    if (!asset) return null;
+    var idPart = String(asset.coinId || asset.symbol || '').trim();
+    if (!idPart) return null;
+    var typePart = asset.type === 'crypto' ? 'crypto' : 'stock';
+    var regex = new RegExp('^news:[^:]+:' + typePart + ':' + escapeRegex(idPart) + '$', 'i');
+    return newestCachedByRegex(regex, maxAgeMs || 0);
+  }
+
+  function anySourceGeneralStocksNewsCache(maxAgeMs) {
+    return newestCachedByRegex(/^news:[^:]+:stock:general$/i, maxAgeMs || 0);
   }
 
   function hasFreshNews(asset, maxAgeMs) {
@@ -1211,12 +1320,16 @@
 
   function hydrateAssetNewsFromCache(asset, maxAgeMs) {
     if (!asset) return null;
+    var sourcePref = asset.type === 'crypto' ? (state.app.newsSourceCrypto || 'auto') : (state.app.newsSourceStocks || 'marketaux');
+    var allowCrossSourceFallback = sourcePref === 'auto';
     var scopedKey = newsCacheKeyForAsset(asset);
     var legacyKey = 'news:' + asset.type + ':' + (asset.coinId || asset.symbol);
     var cached = storage.getCached(state.caches, scopedKey, maxAgeMs || 0) ||
       storage.getCached(state.caches, legacyKey, maxAgeMs || 0) ||
+      (allowCrossSourceFallback ? anySourceNewsCacheForAsset(asset, maxAgeMs || 0) : null) ||
       getCachedAny(scopedKey) ||
-      getCachedAny(legacyKey);
+      getCachedAny(legacyKey) ||
+      (allowCrossSourceFallback ? anySourceNewsCacheForAsset(asset, 0) : null);
     if (Array.isArray(cached) && cached.length) {
       state.news[assetKey(asset)] = cached;
       return cached;
@@ -1372,7 +1485,7 @@
       apiSourcePrefs: state.app.apiSourcePrefs,
       newsScopeStocks: state.app.newsScopeStocks === 'selected' ? 'selected' : 'general',
       sortBy: state.app.sortBy,
-      newsSourceStocks: state.app.newsSourceStocks || 'auto',
+      newsSourceStocks: state.app.newsSourceStocks || 'marketaux',
       newsSourceCrypto: state.app.newsSourceCrypto || 'auto',
       detailChartTimeframeStocks: state.app.detailChartTimeframeStocks || '1M',
       detailChartTimeframeCrypto: state.app.detailChartTimeframeCrypto || '1M',
@@ -1766,19 +1879,24 @@
       '</div>';
     }
 
+    function emaPositionPillClass(label) {
+      var v = String(label || 'Neutral').toLowerCase();
+      if (v === 'strong bullish') return 'indicator-pill--bullish';
+      if (v === 'bearish risk') return 'indicator-pill--bearish';
+      if (v === 'pullback') return 'indicator-pill--pullback';
+      if (v === 'trend test') return 'indicator-pill--test';
+      return 'indicator-pill--neutral';
+    }
+
     function emaPositionBlock(tf) {
       var ep = (tf && tf.emaPosition) || (tf && tf.values && tf.values.emaPosition) || {};
       var label = String(ep.label || 'Neutral');
       var relation = String(ep.relation || '');
-      var toneClass = 'indicator-ema-position__badge--neutral';
-      if (label === 'Strong Bullish') toneClass = 'indicator-ema-position__badge--bullish';
-      else if (label === 'Pullback') toneClass = 'indicator-ema-position__badge--pullback';
-      else if (label === 'Trend Test') toneClass = 'indicator-ema-position__badge--test';
-      else if (label === 'Bearish Risk') toneClass = 'indicator-ema-position__badge--bearish';
+      var toneClass = emaPositionPillClass(label);
       return '<div class="indicator-tech indicator-tech--ema-position">' +
         '<div class="indicator-tech__head">' +
           '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">EMA Position</div>' + (relation ? '<span class="indicator-tech__meta">• ' + escapeHtml(relation) + '</span>' : '') + '</div>' +
-          '<span class="indicator-ema-position__badge ' + toneClass + '">' + escapeHtml(label) + '</span>' +
+          '<span class="indicator-pill indicator-ema-position__badge ' + toneClass + '">' + escapeHtml(label) + '</span>' +
         '</div>' +
         '<div class="indicator-tech__metrics indicator-tech__metrics--3 indicator-ema-position__values">' +
           '<div class="indicator-sr__metric indicator-tech__metric"><span>Close</span><strong>' + escapeHtml(fmtIndicator(ep.close)) + '</strong></div>' +
@@ -1861,14 +1979,10 @@
     var sidePanelEl = ui.el.detailPanel;
     var indicatorsEl = ui.el.indicatorsPanel;
     var fundamentalsEl = ui.el.fundamentalsPanel;
-    if (!layoutEl || !sidePanelEl || !indicatorsEl || !fundamentalsEl) return;
+    var newsPanelEl = ui.el.newsPanel;
+    if (!layoutEl || !sidePanelEl || !indicatorsEl || !fundamentalsEl || !newsPanelEl) return;
     var isMobileLayout = window.matchMedia('(max-width: 1120px)').matches;
     var marketSectionEl = ui.el.marketDataGrid ? ui.el.marketDataGrid.closest('.panel-block') : null;
-    var eventsSectionEl = ui.el.eventsList ? ui.el.eventsList.closest('.panel-block') : null;
-
-    if (eventsSectionEl) {
-      eventsSectionEl.classList.toggle('hidden', !!isMobileLayout);
-    }
 
     if (isMobileLayout) {
       if (marketSectionEl) {
@@ -1878,17 +1992,23 @@
         if (indicatorsEl.parentElement !== sidePanelEl || indicatorsEl.previousSibling !== fundamentalsEl) {
           sidePanelEl.insertBefore(indicatorsEl, fundamentalsEl.nextSibling);
         }
+        if (newsPanelEl.parentElement !== sidePanelEl || newsPanelEl.previousSibling !== indicatorsEl) {
+          sidePanelEl.insertBefore(newsPanelEl, indicatorsEl.nextSibling);
+        }
       } else {
         if (fundamentalsEl.parentElement !== sidePanelEl) sidePanelEl.insertBefore(fundamentalsEl, sidePanelEl.firstChild);
-        if (indicatorsEl.parentElement !== sidePanelEl) sidePanelEl.insertBefore(indicatorsEl, fundamentalsEl.nextSibling);
+        if (indicatorsEl.parentElement !== sidePanelEl || indicatorsEl.previousSibling !== fundamentalsEl) sidePanelEl.insertBefore(indicatorsEl, fundamentalsEl.nextSibling);
+        if (newsPanelEl.parentElement !== sidePanelEl || newsPanelEl.previousSibling !== indicatorsEl) sidePanelEl.insertBefore(newsPanelEl, indicatorsEl.nextSibling);
       }
       indicatorsEl.classList.add('indicators-panel--embedded-mobile');
       fundamentalsEl.classList.add('right-panel--embedded-mobile');
+      newsPanelEl.classList.add('right-panel--embedded-mobile');
       return;
     }
 
     indicatorsEl.classList.remove('indicators-panel--embedded-mobile');
     fundamentalsEl.classList.remove('right-panel--embedded-mobile');
+    newsPanelEl.classList.remove('right-panel--embedded-mobile');
     if (indicatorsEl.parentElement !== layoutEl) {
       layoutEl.insertBefore(indicatorsEl, sidePanelEl.nextSibling);
     }
@@ -1896,6 +2016,11 @@
       layoutEl.insertBefore(fundamentalsEl, indicatorsEl.nextSibling);
     } else if (indicatorsEl.nextSibling !== fundamentalsEl) {
       layoutEl.insertBefore(fundamentalsEl, indicatorsEl.nextSibling);
+    }
+    if (newsPanelEl.parentElement !== layoutEl) {
+      layoutEl.insertBefore(newsPanelEl, fundamentalsEl.nextSibling);
+    } else if (fundamentalsEl.nextSibling !== newsPanelEl) {
+      layoutEl.insertBefore(newsPanelEl, fundamentalsEl.nextSibling);
     }
   }
 
@@ -1922,12 +2047,18 @@
     ui.setTwelveDataToggle(!!state.app.twelveDataEnabled);
     ui.setConnectionModeBadge();
     ui.setModeTabs(state.app.mode);
-    ui.setNewsSourceValue(state.app.mode === 'crypto' ? state.app.newsSourceCrypto : state.app.newsSourceStocks);
-    ui.setNewsScopeToggle(state.app.mode, state.app.newsScopeStocks, !!getSelectedAsset('stocks'));
+    syncNewsSourceSelectForMode(state.app.mode);
     ui.setSortValue(state.app.sortBy);
     var items = getModeComputedItems(state.app.mode);
     ensureValidSelection(state.app.mode, items);
     setStoredSelectionForMode(state.app.mode, state.app.selectedKey);
+    var selectedStock = getSelectedAsset('stocks');
+    ui.setNewsScopeToggle(
+      state.app.mode,
+      state.app.newsScopeStocks,
+      !!selectedStock,
+      selectedStock ? (selectedStock.name || selectedStock.symbol || 'Selected') : 'Selected'
+    );
     ui.renderPortfolio({ mode: state.app.mode, items: items, selectedKey: state.app.selectedKey, hideHoldings: !!state.app.hideHoldings });
     ui.renderTotals(getModeTotals(items), !!state.app.hideHoldings);
     renderAllocation(items);
@@ -3118,10 +3249,21 @@
 
   function refreshAssetNews(asset, options) {
     options = options || {};
-    var source = asset.type === 'crypto' ? (state.app.newsSourceCrypto || 'auto') : (state.app.newsSourceStocks || 'auto');
+    var source = asset.type === 'crypto' ? (state.app.newsSourceCrypto || 'auto') : (state.app.newsSourceStocks || 'marketaux');
+    var allowCrossSourceFallback = source === 'auto';
     var key = newsCacheKeyForAsset(asset);
+    function stillActiveSource() {
+      var current = asset.type === 'crypto' ? (state.app.newsSourceCrypto || 'auto') : (state.app.newsSourceStocks || 'marketaux');
+      return current === source;
+    }
+    function applyNewsItems(items) {
+      if (!stillActiveSource()) return items;
+      state.news[assetKey(asset)] = items;
+      renderDetails();
+      return items;
+    }
     var fetcher = function () {
-      return PT.NewsAPI.getNews(asset, { source: source });
+      return PT.NewsAPI.getNews(asset, { source: source, force: !!options.force });
     };
     var saveSnapshot = function (items) {
       if (!PT.NewsAPI || typeof PT.NewsAPI.saveCachedSnapshot !== 'function') return;
@@ -3158,29 +3300,36 @@
         });
       })();
     return load.then(function (items) {
-      state.news[assetKey(asset)] = items;
-      renderDetails();
+      applyNewsItems(items);
     }).catch(function () {
       var cached = storage.getCached(state.caches, key, 1000 * 60 * 60 * 24 * 3);
+      if (!cached && allowCrossSourceFallback) cached = anySourceNewsCacheForAsset(asset, 1000 * 60 * 60 * 24 * 3);
       if (cached) {
-        state.news[assetKey(asset)] = cached;
-        renderDetails();
+        applyNewsItems(cached);
         return;
       }
       loadRemoteSnapshot().then(function (remoteItems) {
-        state.news[assetKey(asset)] = remoteItems || [];
-        renderDetails();
+        applyNewsItems(remoteItems || []);
       }).catch(function () {
-        state.news[assetKey(asset)] = [];
-        renderDetails();
+        applyNewsItems([]);
       });
     });
   }
 
   function refreshGeneralStocksNews(options) {
     options = options || {};
-    var source = state.app.newsSourceStocks || 'auto';
+    var source = state.app.newsSourceStocks || 'marketaux';
+    var allowCrossSourceFallback = source === 'auto';
     var key = newsCacheKeyForGeneralStocks();
+    function stillActiveSource() {
+      return (state.app.newsSourceStocks || 'marketaux') === source;
+    }
+    function applyGeneralNews(items) {
+      if (!stillActiveSource()) return items;
+      state.news['stocks:general'] = items || [];
+      renderDetails();
+      return items || [];
+    }
     var fetcher = function () {
       if (PT.NewsAPI && typeof PT.NewsAPI.getGeneralStocksNews === 'function') {
         return PT.NewsAPI.getGeneralStocksNews({ source: source });
@@ -3222,24 +3371,17 @@
         });
       })();
     return load.then(function (items) {
-      state.news['stocks:general'] = items || [];
-      renderDetails();
-      return items;
+      return applyGeneralNews(items || []);
     }).catch(function () {
       var cached = storage.getCached(state.caches, key, 1000 * 60 * 60 * 24 * 3);
+      if (!cached && allowCrossSourceFallback) cached = anySourceGeneralStocksNewsCache(1000 * 60 * 60 * 24 * 3);
       if (cached) {
-        state.news['stocks:general'] = cached;
-        renderDetails();
-        return state.news['stocks:general'];
+        return applyGeneralNews(cached);
       }
       return loadRemoteSnapshot().then(function (remoteItems) {
-        state.news['stocks:general'] = remoteItems || [];
-        renderDetails();
-        return state.news['stocks:general'];
+        return applyGeneralNews(remoteItems || []);
       }).catch(function () {
-        state.news['stocks:general'] = [];
-        renderDetails();
-        return state.news['stocks:general'];
+        return applyGeneralNews([]);
       });
     });
   }
@@ -3256,6 +3398,54 @@
     var selected = getSelectedAsset(state.app.mode);
     if (!selected) return Promise.resolve([]);
     return refreshAssetNews(selected, options);
+  }
+
+  function snapshotVisibleNewsForCurrentSource() {
+    var changed = false;
+    if (state.app.mode === 'stocks') {
+      var sourceStocks = state.app.newsSourceStocks || 'marketaux';
+      if (state.app.newsScopeStocks === 'general') {
+        var generalItems = state.news['stocks:general'];
+        if (Array.isArray(generalItems) && generalItems.length) {
+          storage.setCached(state.caches, 'news:' + sourceStocks + ':stock:general', generalItems);
+          changed = true;
+        }
+      } else {
+        var selectedStock = getSelectedAsset('stocks');
+        var selectedItems = selectedStock ? state.news[assetKey(selectedStock)] : null;
+        if (selectedStock && Array.isArray(selectedItems) && selectedItems.length) {
+          storage.setCached(state.caches, 'news:' + sourceStocks + ':stock:' + (selectedStock.symbol || ''), selectedItems);
+          changed = true;
+        }
+      }
+    } else {
+      var sourceCrypto = state.app.newsSourceCrypto || 'auto';
+      var selectedCrypto = getSelectedAsset('crypto');
+      var cryptoItems = selectedCrypto ? state.news[assetKey(selectedCrypto)] : null;
+      if (selectedCrypto && Array.isArray(cryptoItems) && cryptoItems.length) {
+        storage.setCached(state.caches, 'news:' + sourceCrypto + ':crypto:' + (selectedCrypto.coinId || selectedCrypto.symbol || ''), cryptoItems);
+        changed = true;
+      }
+    }
+    if (changed) storage.saveCache(state.caches);
+  }
+
+  function hydrateCurrentNewsScopeFromCache(maxAgeMs) {
+    if (state.app.mode === 'stocks') {
+      if (state.app.newsScopeStocks === 'general') {
+        var generalKey = newsCacheKeyForGeneralStocks();
+        var generalCached = storage.getCached(state.caches, generalKey, maxAgeMs || 0) || getCachedAny(generalKey);
+        if (Array.isArray(generalCached) && generalCached.length) {
+          state.news['stocks:general'] = generalCached;
+          return generalCached;
+        }
+        return null;
+      }
+      var selectedStock = getSelectedAsset('stocks');
+      return selectedStock ? hydrateAssetNewsFromCache(selectedStock, maxAgeMs || 0) : null;
+    }
+    var selected = getSelectedAsset(state.app.mode);
+    return selected ? hydrateAssetNewsFromCache(selected, maxAgeMs || 0) : null;
   }
 
   function refreshAssetTwitter(asset) {
@@ -3292,6 +3482,7 @@
 
     var cacheKey = fundamentalsCacheKeyForAsset(asset) || assetKey(asset);
     var existing = getFundamentalsSnapshot(asset);
+    var needsCryptoBandRefresh = asset.type === 'crypto' && cryptoFundamentalsNeedsMarketCapRefresh(existing);
     var lastLocal = Number(existing && (existing.localFetchedAt || existing.fetchedAt || 0) || 0);
     var existingIsError = !!(existing && !existing.panel && (existing.error || existing.errorCode || existing.errorDetail));
     var existingErrorText = String(existing && (existing.errorDetail || existing.errorCode || existing.error || '') || '').toLowerCase();
@@ -3303,7 +3494,7 @@
     var freshnessWindowMs = existingIsError
       ? (legacyGenericError ? 0 : FUNDAMENTALS_ERROR_RETRY_MS)
       : FUNDAMENTALS_LOCAL_FRESH_MS;
-    if (!options.force && existing && (Date.now() - lastLocal) <= freshnessWindowMs) {
+    if (!options.force && !needsCryptoBandRefresh && existing && (Date.now() - lastLocal) <= freshnessWindowMs) {
       if (state.app.apiDebugEnabled) {
         try {
           console.debug('[FA]', 'cache hit', cacheKey);
@@ -3313,7 +3504,7 @@
     }
 
     var lastRequestStamp = Number(FUNDAMENTALS_REQUEST_STAMPS[cacheKey] || 0) || 0;
-    if (!options.force && lastRequestStamp && (Date.now() - lastRequestStamp) <= 15000) {
+    if (!options.force && !needsCryptoBandRefresh && lastRequestStamp && (Date.now() - lastRequestStamp) <= 15000) {
       if (state.app.apiDebugEnabled) {
         try {
           console.debug('[FA]', 'request cooldown hit', cacheKey);
@@ -3327,7 +3518,7 @@
 
     if (state.app.apiDebugEnabled) {
       try {
-        console.debug('[FA]', 'cache miss', cacheKey, 'force=', !!options.force);
+        console.debug('[FA]', 'cache miss', cacheKey, 'force=', !!options.force, 'needsCryptoBandRefresh=', !!needsCryptoBandRefresh);
       } catch (err) {}
     }
 
@@ -4060,8 +4251,16 @@
     }
     if (ui.el.newsSourceSelect) {
       ui.el.newsSourceSelect.addEventListener('change', function () {
-        if (state.app.mode === 'crypto') state.app.newsSourceCrypto = ui.el.newsSourceSelect.value || 'auto';
-        else state.app.newsSourceStocks = ui.el.newsSourceSelect.value || 'auto';
+        snapshotVisibleNewsForCurrentSource();
+        var selected = String(ui.el.newsSourceSelect.value || 'auto').toLowerCase();
+        var allowed = orderedNewsSourcesForMode(state.app.mode === 'crypto' ? 'crypto' : 'stocks');
+        if (selected !== 'auto' && allowed.indexOf(selected) < 0) {
+          selected = allowed[0] || 'auto';
+        }
+        if (state.app.mode === 'crypto') state.app.newsSourceCrypto = selected;
+        else state.app.newsSourceStocks = selected;
+        syncNewsSourceSelectForMode(state.app.mode);
+        hydrateCurrentNewsScopeFromCache(1000 * 60 * 60 * 24 * 3);
         renderAll();
         refreshCurrentNewsScope({ force: true });
       });

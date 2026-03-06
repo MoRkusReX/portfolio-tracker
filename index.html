@@ -180,77 +180,24 @@
           <div id="lineFallback" class="chart-fallback hidden">Chart unavailable.</div>
         </div>
 
-        <section class="panel-block">
+        <section id="marketDataBlock" class="panel-block">
           <div class="panel-block__head">
             <h4>Market Data</h4>
           </div>
           <div id="marketDataGrid" class="mini-grid"></div>
         </section>
 
-        <section class="panel-block">
-          <div class="panel-block__head">
-            <h4>News</h4>
-            <div id="newsScopeToggle" class="news-scope-toggle" role="group" aria-label="News scope">
-              <button id="newsScopeGeneralBtn" class="btn btn--tiny btn--ghost" type="button">General</button>
-              <button id="newsScopeSelectedBtn" class="btn btn--tiny btn--ghost" type="button">Selected</button>
-            </div>
-            <select id="newsSourceSelect" class="news-source-select" title="News source">
-              <option value="auto">Auto</option>
-              <option value="yahoo">Yahoo</option>
-              <option value="tickertick">TickerTick</option>
-            </select>
-            <button id="newsRefreshBtn" class="btn btn--tiny btn--ghost" type="button">Refresh</button>
-          </div>
-          <div id="newsList" class="news-list"></div>
-        </section>
-
-        <section class="panel-block">
-          <div class="panel-block__head">
-            <h4>Socials</h4>
-          </div>
-          <div id="twitterSection" class="twitter-placeholder"></div>
-        </section>
-
-        <section class="panel-block">
+        <section id="linksSocialsBlock" class="panel-block">
           <div class="panel-block__head">
             <h4>Useful Links</h4>
           </div>
-          <div id="usefulLinksList" class="news-list"></div>
+          <div class="links-socials-stack">
+            <div class="links-socials-group">
+              <div id="usefulLinksList" class="news-list"></div>
+            </div>
+          </div>
         </section>
 
-        <section id="btcDominancePanel" class="panel-block hidden">
-          <div class="panel-block__head">
-            <h4>BTC Dominance</h4>
-            <span id="btcDominanceLabel" class="muted">Global crypto market share</span>
-            <a class="link-btn" href="https://www.tradingview.com/symbols/CRYPTOCAP-BTC.D/" target="_blank" rel="noopener noreferrer">Open Chart</a>
-          </div>
-          <div class="btcdom-card">
-            <div class="btcdom-card__hero">
-              <div>
-                <div class="btcdom-card__value" id="btcDominanceValue">--.--%</div>
-                <div class="btcdom-card__sub" id="btcDominanceUpdated">Waiting for live data...</div>
-              </div>
-              <div class="btcdom-card__coin">₿</div>
-            </div>
-            <div class="btcdom-bars">
-              <div class="btcdom-bars__row">
-                <span>BTC</span>
-                <div class="btcdom-bars__track"><div id="btcDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--btc" style="width:0%"></div></div>
-                <strong id="btcDominanceBarLabel">--.--%</strong>
-              </div>
-              <div class="btcdom-bars__row">
-                <span>ETH</span>
-                <div class="btcdom-bars__track"><div id="ethDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--eth" style="width:0%"></div></div>
-                <strong id="ethDominanceBarLabel">--.--%</strong>
-              </div>
-              <div class="btcdom-bars__row">
-                <span>Others</span>
-                <div class="btcdom-bars__track"><div id="othersDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--other" style="width:0%"></div></div>
-                <strong id="othersDominanceBarLabel">--.--%</strong>
-              </div>
-            </div>
-          </div>
-        </section>
       </aside>
 
       <aside class="indicators-panel glass" id="indicatorsPanel">
@@ -288,6 +235,72 @@
           <div id="fundamentalsSummary" class="fundamentals-summary"></div>
           <div id="fundamentalsGrid" class="fundamentals-grid"></div>
           <div id="fundamentalsReasons" class="fundamentals-reasons"></div>
+        </section>
+        <section id="btcDominancePanel" class="panel-block hidden">
+          <div class="panel-block__head">
+            <h4>BTC Dominance</h4>
+            <span id="btcDominanceLabel" class="muted">Global crypto market share</span>
+            <a class="link-btn" href="https://www.tradingview.com/symbols/CRYPTOCAP-BTC.D/" target="_blank" rel="noopener noreferrer">Open Chart</a>
+          </div>
+          <div class="btcdom-card">
+            <div class="btcdom-card__hero">
+              <div>
+                <div class="btcdom-card__value" id="btcDominanceValue">--.--%</div>
+                <div class="btcdom-card__sub" id="btcDominanceUpdated">Waiting for live data...</div>
+              </div>
+              <div class="btcdom-card__coin">₿</div>
+            </div>
+            <div class="btcdom-bars">
+              <div class="btcdom-bars__row">
+                <span>BTC</span>
+                <div class="btcdom-bars__track"><div id="btcDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--btc" style="width:0%"></div></div>
+                <strong id="btcDominanceBarLabel">--.--%</strong>
+              </div>
+              <div class="btcdom-bars__row">
+                <span>ETH</span>
+                <div class="btcdom-bars__track"><div id="ethDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--eth" style="width:0%"></div></div>
+                <strong id="ethDominanceBarLabel">--.--%</strong>
+              </div>
+              <div class="btcdom-bars__row">
+                <span>Others</span>
+                <div class="btcdom-bars__track"><div id="othersDominanceBar" class="btcdom-bars__fill btcdom-bars__fill--other" style="width:0%"></div></div>
+                <strong id="othersDominanceBarLabel">--.--%</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <aside class="right-panel glass" id="newsPanel">
+        <div class="section-header">
+          <div>
+            <h3>News</h3>
+            <div class="muted">Market headlines and selected asset feed</div>
+          </div>
+        </div>
+        <section class="panel-block panel-block--news">
+          <div class="panel-block__head">
+            <h4>News Feed</h4>
+            <div id="newsScopeToggle" class="news-scope-toggle" role="group" aria-label="News scope">
+              <button id="newsScopeGeneralBtn" class="btn btn--tiny btn--ghost" type="button">General</button>
+              <button id="newsScopeSelectedBtn" class="btn btn--tiny btn--ghost" type="button">Selected</button>
+            </div>
+            <select id="newsSourceSelect" class="news-source-select" title="News source">
+              <option value="auto">Auto</option>
+              <option value="marketaux">Marketaux</option>
+              <option value="yahoo">Yahoo</option>
+              <option value="tickertick">TickerTick</option>
+              <option value="alphavantage">Alpha Vantage</option>
+            </select>
+            <button id="newsRefreshBtn" class="btn btn--tiny btn--ghost" type="button">Refresh</button>
+          </div>
+          <div id="newsList" class="news-list"></div>
+        </section>
+        <section class="panel-block panel-block--socials">
+          <div class="panel-block__head">
+            <h4>Socials</h4>
+          </div>
+          <div id="twitterSection" class="twitter-placeholder"></div>
         </section>
       </aside>
     </main>

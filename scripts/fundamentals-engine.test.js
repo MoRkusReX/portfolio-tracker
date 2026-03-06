@@ -90,5 +90,11 @@ assert.strictEqual(engine.interpretValuation(24, 6).label, 'Fair');
 // Crypto helpers still behave as expected.
 assert.strictEqual(engine.mapCryptoFAScoreToLabel(4), 'Strong Token Fundamentals');
 assert.strictEqual(engine.interpretDilutionRisk(100, 120, 90, 100).label, 'Low dilution risk');
+const microCap = engine.interpretCryptoMarketCap(800_000);
+assert.strictEqual(microCap.band, 'Micro cap');
+assert.strictEqual(microCap.status, 'Risk');
+const midCap = engine.interpretCryptoMarketCap(800_000_000);
+assert.strictEqual(midCap.band, 'Mid cap');
+assert.strictEqual(midCap.status, 'Healthy');
 
 console.log('fundamentals-engine tests passed');
