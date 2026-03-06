@@ -6,6 +6,7 @@ const { execFileSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { createFundamentalsService } = require('./scripts/fundamentals-service.js');
 
 // Loads .env values without introducing another dependency.
 function loadDotEnv() {
@@ -43,6 +44,8 @@ const stocktwitsCache = new Map();
 const TWELVEDATA_API_KEY = String(process.env.TWELVEDATA_API_KEY || '').trim();
 // Holds the CoinMarketCap API key for server-side crypto quote requests.
 const COINMARKETCAP_API_KEY = String(process.env.COINMARKETCAP_API_KEY || '').trim();
+// Holds the Financial Modeling Prep API key for stock fundamentals requests.
+const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
 // Chooses the Python interpreter used for the SQLite bridge helper.
 const PYTHON_BIN = String(process.env.PYTHON_BIN || 'python3').trim() || 'python3';
 // Resolves the on-disk SQLite database location.
@@ -125,6 +128,13 @@ async function runDb(command, args, input) {
   if (parsed && parsed.error) throw new Error(parsed.error);
   return parsed;
 }
+
+// Provides server-side fundamentals orchestration with provider adapters and DB-backed cache cadence.
+const fundamentalsService = createFundamentalsService({
+  runDb,
+  fmpApiKey: FMP_API_KEY,
+  userAgent: BROWSER_UA
+});
 
 // Chooses fetch sizes and retention limits for a requested indicator interval.
 function indicatorPolicy(interval, requestedOutputsize) {
@@ -686,6 +696,39 @@ app.put('/api/chart-cache', async (req, res) => {
     return res.status(500).json({
       error: 'chart_cache_write_failed',
       detail: String(err && err.message || 'Failed to save chart cache').slice(0, 240)
+    });
+  }
+});
+
+// Reads stock/crypto fundamentals from DB cache or upstream providers based on freshness policy.
+app.get('/api/fundamentals', async (req, res) => {
+  try {
+    const assetType = String(req.query.assetType || '').trim().toLowerCase() === 'crypto' ? 'crypto' : 'stock';
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    const coinId = String(req.query.coinId || '').trim().toLowerCase();
+    const includeProtocol = String(req.query.includeProtocol || '0') === '1';
+    const forceRefresh = String(req.query.force || '0') === '1';
+    if (assetType === 'stock' && !symbol) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    if (assetType === 'crypto' && !coinId) {
+      return res.status(400).json({ error: 'missing_coin_id' });
+    }
+    const payload = await fundamentalsService.getFundamentals({
+      assetType,
+      symbol,
+      coinId,
+      includeProtocol,
+      forceRefresh
+    });
+    return res.json(payload || {});
+  } catch (err) {
+    const msg = String((err && err.message) || 'Fundamentals request failed').slice(0, 240);
+    const status = Number(err && err.statusCode || 500) || 500;
+    return res.status(status).json({
+      error: /missing_/i.test(msg) ? msg : 'fundamentals_failed',
+      status,
+      detail: msg
     });
   }
 });

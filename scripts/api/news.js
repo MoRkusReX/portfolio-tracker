@@ -18,17 +18,50 @@
     return String(location.origin || '').replace(/\/$/, '');
   }
 
-  function fetchText(url, debugLabel) {
-    return fetch(proxifyUrl(url), { cache: 'no-store', __ptDebugLabel: debugLabel || '' }).then(function (r) {
+  function proxyUrl(url) {
+    var base = apiBase();
+    if (!base) return url;
+    return base + '/api/generic?url=' + encodeURIComponent(url);
+  }
+
+  function isAbsoluteUrl(url) {
+    return /^https?:\/\//i.test(String(url || '').trim());
+  }
+
+  function shouldRetryViaProxy(url) {
+    if (!isAbsoluteUrl(url)) return false;
+    var cfg = window.PT_CONFIG || {};
+    if (cfg.useLocalProxy) return false;
+    return !!apiBase();
+  }
+
+  function doFetchText(url, debugLabel) {
+    return fetch(url, { cache: 'no-store', __ptDebugLabel: debugLabel || '' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     });
   }
 
-  function fetchJson(url, debugLabel) {
-    return fetch(proxifyUrl(url), { cache: 'no-store', __ptDebugLabel: debugLabel || '' }).then(function (r) {
+  function fetchText(url, debugLabel) {
+    var target = proxifyUrl(url);
+    return doFetchText(target, debugLabel).catch(function (err) {
+      if (!shouldRetryViaProxy(url) || target !== url) throw err;
+      return doFetchText(proxyUrl(url), String(debugLabel || '') + '.proxyFallback');
+    });
+  }
+
+  function doFetchJson(url, debugLabel) {
+    return fetch(url, { cache: 'no-store', __ptDebugLabel: debugLabel || '' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
+    });
+  }
+
+  function fetchJson(url, debugLabel) {
+    var target = proxifyUrl(url);
+    return doFetchJson(target, debugLabel).catch(function (err) {
+      if (!shouldRetryViaProxy(url) || target !== url) throw err;
+      return doFetchJson(proxyUrl(url), String(debugLabel || '') + '.proxyFallback');
     });
   }
 
@@ -94,6 +127,41 @@
       var items = parseRss(xml);
       if (!items.length) throw new Error('No Yahoo RSS items');
       return items;
+    }).catch(function () {
+      return yahooSearchNews(symbol);
+    });
+  }
+
+  function yahooSearchNews(query) {
+    var q = String(query || '').trim();
+    if (!q) return Promise.reject(new Error('Missing Yahoo query'));
+    var url = 'https://query2.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(q) + '&quotesCount=0&newsCount=20&enableFuzzyQuery=false&region=US&lang=en-US';
+    return fetchJson(url, 'NewsAPI.yahooSearchNews').then(function (data) {
+      var rows = Array.isArray(data && data.news) ? data.news : [];
+      var items = rows.map(function (row) {
+        var title = row && (row.title || row.shortname || row.summary);
+        var link = row && (row.link || row.clickThroughUrl && row.clickThroughUrl.url || row.canonicalUrl && row.canonicalUrl.url);
+        var published = row && (row.providerPublishTime != null ? row.providerPublishTime : (row.pubDate || row.published));
+        var relatedTickers = Array.isArray(row && row.relatedTickers)
+          ? row.relatedTickers.map(function (t) { return String(t || '').trim().toUpperCase(); }).filter(Boolean)
+          : [];
+        if (!title) return null;
+        return {
+          title: String(title).trim(),
+          link: link ? String(link).trim() : '#',
+          published: normalizePublished(published),
+          publishedMs: parsePublishedMs(published),
+          source: String((row && (row.publisher || row.provider || row.source)) || 'Yahoo Finance').trim(),
+          relatedTickers: relatedTickers
+        };
+      }).filter(Boolean).sort(function (a, b) {
+        return (Number(b.publishedMs) || 0) - (Number(a.publishedMs) || 0);
+      }).slice(0, 8).map(function (item) {
+        delete item.publishedMs;
+        return item;
+      });
+      if (!items.length) throw new Error('No Yahoo search news items');
+      return items;
     });
   }
 
@@ -117,7 +185,9 @@
         return next();
       });
     }
-    return next();
+    return next().catch(function () {
+      return yahooSearchNews('stock market');
+    });
   }
 
   function pickArray(data) {
@@ -159,7 +229,11 @@
     var name = String(asset && asset.name || '').toUpperCase();
     var title = String(item && item.title || '').toUpperCase();
     var src = String(item && item.source || '').toUpperCase();
+    var relatedTickers = Array.isArray(item && item.relatedTickers)
+      ? item.relatedTickers.map(function (t) { return String(t || '').toUpperCase(); })
+      : [];
     if (!symbol || !title) return false;
+    if (relatedTickers.indexOf(symbol) >= 0) return true;
     if (title.indexOf(symbol) >= 0) return true;
     if (name && name.length >= 4 && title.indexOf(name) >= 0) return true;
     // ETF names are often shortened in headlines; allow source mention for strict ticker feeds.

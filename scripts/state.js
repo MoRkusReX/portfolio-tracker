@@ -89,6 +89,16 @@
       ]
     },
     {
+      id: 'fundamentals',
+      label: 'Fundamentals',
+      note: 'Stock fundamentals via FMP and token fundamentals via CoinGecko (optional DefiLlama)',
+      sources: [
+        { id: 'fmp', label: 'Financial Modeling Prep', assetTypes: ['stock'], enabled: true, requiresKey: true },
+        { id: 'coingecko', label: 'CoinGecko', assetTypes: ['crypto'], enabled: true },
+        { id: 'defillama', label: 'DefiLlama (optional)', assetTypes: ['crypto'], enabled: true }
+      ]
+    },
+    {
       id: 'events',
       label: 'Events',
       note: 'Earnings and asset event panels',
@@ -221,6 +231,10 @@
     news: {},
     twitter: {},
     events: {},
+    fundamentals: {
+      stocks: {},
+      crypto: {}
+    },
     indicators: {
       stocks: null,
       crypto: null

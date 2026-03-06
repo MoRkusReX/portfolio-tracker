@@ -19,6 +19,11 @@
   var API_SOURCE_DRAG = null;
   var CRYPTO_PARTICLES = null;
   var INDICATOR_IN_FLIGHT = {};
+  var FUNDAMENTALS_IN_FLIGHT = {};
+  var FUNDAMENTALS_REQUEST_STAMPS = {};
+  var FUNDAMENTALS_LOCAL_FRESH_MS = 1000 * 60 * 30;
+  var FUNDAMENTALS_ERROR_RETRY_MS = 1000 * 60 * 3;
+  var REFRESH_BTN_FEEDBACK_TIMER = null;
   var PORTFOLIO_REMOTE_REV = 0;
   var PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = false;
   var INDICATOR_EXPLORER = {
@@ -215,6 +220,23 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // Plays a short visual confirmation animation on the manual refresh button.
+  function playRefreshButtonFeedback() {
+    if (!ui || !ui.el || !ui.el.refreshBtn) return;
+    var btn = ui.el.refreshBtn;
+    if (REFRESH_BTN_FEEDBACK_TIMER) {
+      clearTimeout(REFRESH_BTN_FEEDBACK_TIMER);
+      REFRESH_BTN_FEEDBACK_TIMER = null;
+    }
+    btn.classList.remove('is-clicked');
+    void btn.offsetWidth;
+    btn.classList.add('is-clicked');
+    REFRESH_BTN_FEEDBACK_TIMER = setTimeout(function () {
+      btn.classList.remove('is-clicked');
+      REFRESH_BTN_FEEDBACK_TIMER = null;
+    }, 560);
   }
 
   function setStatus(text) {
@@ -989,6 +1011,7 @@
     state.news = {};
     state.twitter = {};
     state.events = {};
+    state.fundamentals = { stocks: {}, crypto: {} };
     normalizeImportedAssets();
     hydrateCachedData();
     hydrateIndicatorsFromCache();
@@ -1082,6 +1105,93 @@
   function getCachedAny(key) {
     var entry = state.caches && state.caches[key];
     return entry && entry.data ? entry.data : null;
+  }
+
+  // Builds a stable local cache key for fundamentals by asset identity.
+  function fundamentalsCacheKeyForAsset(asset) {
+    if (!asset || !asset.type) return '';
+    if (asset.type === 'crypto') {
+      var coinId = String(asset.coinId || asset.id || '').trim().toLowerCase();
+      if (!coinId) return '';
+      return 'fa:crypto:' + coinId;
+    }
+    var symbol = String(asset.yahooSymbol || asset.symbol || '').trim().toUpperCase();
+    if (!symbol) return '';
+    return 'fa:stock:' + symbol;
+  }
+
+  // Resolves the in-memory fundamentals bucket for a given asset.
+  function fundamentalsBucketForAsset(asset) {
+    if (!asset || !asset.type) return null;
+    if (!state.fundamentals || typeof state.fundamentals !== 'object') {
+      state.fundamentals = { stocks: {}, crypto: {} };
+    }
+    if (!state.fundamentals.stocks || typeof state.fundamentals.stocks !== 'object') state.fundamentals.stocks = {};
+    if (!state.fundamentals.crypto || typeof state.fundamentals.crypto !== 'object') state.fundamentals.crypto = {};
+    return asset.type === 'crypto' ? state.fundamentals.crypto : state.fundamentals.stocks;
+  }
+
+  // Returns whether fundamentals source routing is enabled for a given asset type.
+  function fundamentalsSourceEnabled(assetType) {
+    if (!window.PT || !window.PT.ApiSources || typeof window.PT.ApiSources.getOrdered !== 'function') return true;
+    var safeType = assetType === 'crypto' ? 'crypto' : 'stock';
+    var ordered = window.PT.ApiSources.getOrdered('fundamentals', safeType, state.app.apiSourcePrefs) || [];
+    if (safeType === 'crypto') return ordered.indexOf('coingecko') >= 0;
+    return ordered.indexOf('fmp') >= 0;
+  }
+
+  // Returns whether optional DefiLlama enrichment is enabled in source preferences.
+  function fundamentalsProtocolSourceEnabled() {
+    if (!window.PT || !window.PT.ApiSources || typeof window.PT.ApiSources.getOrdered !== 'function') return false;
+    var ordered = window.PT.ApiSources.getOrdered('fundamentals', 'crypto', state.app.apiSourcePrefs) || [];
+    return ordered.indexOf('defillama') >= 0;
+  }
+
+  // Reads a cached fundamentals snapshot for a given asset.
+  function getFundamentalsSnapshot(asset) {
+    var bucket = fundamentalsBucketForAsset(asset);
+    if (!bucket) return null;
+    return bucket[asset.id] || null;
+  }
+
+  // Persists a fundamentals snapshot into memory and local cache.
+  function setFundamentalsSnapshot(asset, payload) {
+    var bucket = fundamentalsBucketForAsset(asset);
+    if (!bucket) return;
+    var stamped = Object.assign({}, payload || {}, {
+      localFetchedAt: Date.now()
+    });
+    bucket[asset.id] = stamped;
+    var cacheKey = fundamentalsCacheKeyForAsset(asset);
+    if (cacheKey) {
+      storage.setCached(state.caches, cacheKey, stamped);
+      storage.saveCache(state.caches);
+    }
+  }
+
+  // Maps provider/proxy error details into concise user-facing fundamentals status text.
+  function normalizeFundamentalsErrorMessage(raw) {
+    var code = String(raw || '').trim();
+    if (!code) return '';
+    var lower = code.toLowerCase();
+    if (lower === 'fmp_key_missing') return 'FMP API key missing on proxy server. Set FMP_API_KEY in .env and restart.';
+    if (lower.indexOf('stock_fundamentals_unavailable') === 0) {
+      var stockParts = code.split(':');
+      if (stockParts.length > 1) return 'Stock fundamentals unavailable: ' + stockParts.slice(1).join(':').trim();
+      return 'Stock fundamentals are temporarily unavailable. Showing cached data when possible.';
+    }
+    if (lower.indexOf('crypto_fundamentals_unavailable') === 0) {
+      var cryptoParts = code.split(':');
+      if (cryptoParts.length > 1) return 'Token fundamentals unavailable: ' + cryptoParts.slice(1).join(':').trim();
+      return 'Token fundamentals are temporarily unavailable. Showing cached data when possible.';
+    }
+    if (lower === 'missing_symbol') return 'Missing stock symbol for fundamentals request.';
+    if (lower === 'missing_coin_id') return 'Missing coin id for fundamentals request.';
+    if (lower.indexOf('failed to fetch') >= 0 || lower.indexOf('networkerror') >= 0) {
+      return 'Could not reach the local proxy server. Check that it is running.';
+    }
+    if (/^http\s+\d+/.test(lower)) return 'Fundamentals request failed (' + code + ').';
+    return code.replace(/_/g, ' ');
   }
 
   function newsCacheKeyForAsset(asset) {
@@ -1201,6 +1311,7 @@
       var histKey = 'hist:' + asset.type + ':' + (asset.coinId || asset.stooqSymbol || asset.symbol);
       var newsKey = 'news:' + asset.type + ':' + (asset.coinId || asset.symbol);
       var eventsKey = 'events:v2:' + asset.type + ':' + (asset.coinId || asset.symbol);
+      var fundamentalsKey = fundamentalsCacheKeyForAsset(asset);
 
       var hist = getCachedAny(histKey);
       if (hist) {
@@ -1223,6 +1334,12 @@
 
       var events = getCachedAny(eventsKey);
       if (events) state.events[assetKey(asset)] = events;
+
+      var fundamentals = fundamentalsKey ? getCachedAny(fundamentalsKey) : null;
+      if (fundamentals) {
+        var bucket = fundamentalsBucketForAsset(asset);
+        if (bucket) bucket[asset.id] = fundamentals;
+      }
     });
 
     var globalMetrics = getCachedAny('crypto:global:metrics');
@@ -1743,7 +1860,8 @@
     var layoutEl = document.querySelector('.layout');
     var sidePanelEl = ui.el.detailPanel;
     var indicatorsEl = ui.el.indicatorsPanel;
-    if (!layoutEl || !sidePanelEl || !indicatorsEl) return;
+    var fundamentalsEl = ui.el.fundamentalsPanel;
+    if (!layoutEl || !sidePanelEl || !indicatorsEl || !fundamentalsEl) return;
     var isMobileLayout = window.matchMedia('(max-width: 1120px)').matches;
     var marketSectionEl = ui.el.marketDataGrid ? ui.el.marketDataGrid.closest('.panel-block') : null;
     var eventsSectionEl = ui.el.eventsList ? ui.el.eventsList.closest('.panel-block') : null;
@@ -1753,16 +1871,31 @@
     }
 
     if (isMobileLayout) {
-      if (indicatorsEl.parentElement !== sidePanelEl && marketSectionEl) {
-        sidePanelEl.insertBefore(indicatorsEl, marketSectionEl.nextSibling);
+      if (marketSectionEl) {
+        if (fundamentalsEl.parentElement !== sidePanelEl || fundamentalsEl.previousSibling !== marketSectionEl) {
+          sidePanelEl.insertBefore(fundamentalsEl, marketSectionEl.nextSibling);
+        }
+        if (indicatorsEl.parentElement !== sidePanelEl || indicatorsEl.previousSibling !== fundamentalsEl) {
+          sidePanelEl.insertBefore(indicatorsEl, fundamentalsEl.nextSibling);
+        }
+      } else {
+        if (fundamentalsEl.parentElement !== sidePanelEl) sidePanelEl.insertBefore(fundamentalsEl, sidePanelEl.firstChild);
+        if (indicatorsEl.parentElement !== sidePanelEl) sidePanelEl.insertBefore(indicatorsEl, fundamentalsEl.nextSibling);
       }
       indicatorsEl.classList.add('indicators-panel--embedded-mobile');
+      fundamentalsEl.classList.add('right-panel--embedded-mobile');
       return;
     }
 
     indicatorsEl.classList.remove('indicators-panel--embedded-mobile');
+    fundamentalsEl.classList.remove('right-panel--embedded-mobile');
     if (indicatorsEl.parentElement !== layoutEl) {
       layoutEl.insertBefore(indicatorsEl, sidePanelEl.nextSibling);
+    }
+    if (fundamentalsEl.parentElement !== layoutEl) {
+      layoutEl.insertBefore(fundamentalsEl, indicatorsEl.nextSibling);
+    } else if (indicatorsEl.nextSibling !== fundamentalsEl) {
+      layoutEl.insertBefore(fundamentalsEl, indicatorsEl.nextSibling);
     }
   }
 
@@ -2134,6 +2267,7 @@
     var asset = getSelectedAsset(state.app.mode);
     var computed = getSelectedComputed(state.app.mode);
     var baseQuote = asset ? getMarketFor(asset) : null;
+    var fundamentals = asset ? getFundamentalsSnapshot(asset) : null;
     var detailTf = detailChartTimeframeForMode(state.app.mode);
     renderChartTimeframeButtons(ui.el.detailChartTimeframes, detailTf, 'detail', state.app.mode);
     ui.renderDetailHeader(asset, computed || {}, !!state.app.hideHoldings, baseQuote || null);
@@ -2148,10 +2282,22 @@
       }
       ui.renderTwitter({ message: 'Select an asset to load Stocktwits feed.', searchUrl: '#', linkLabel: 'Open Stocktwits' });
       ui.renderEvents([]);
+      ui.renderFundamentals(null, null, 'Select an asset to load fundamentals.');
       chartMgr.renderAssetLine(ui.el.assetChart, ui.el.lineFallback, [], [], '');
       return;
     }
     var quoteData = getMarketFor(asset);
+    var faSourceEnabled = fundamentalsSourceEnabled(asset.type === 'crypto' ? 'crypto' : 'stock');
+    if (!faSourceEnabled) {
+      ui.renderFundamentals(null, asset, 'Fundamentals source disabled in API Sources.');
+    } else if (fundamentals) {
+      var faMsg = normalizeFundamentalsErrorMessage(
+        (fundamentals && (fundamentals.errorDetail || fundamentals.errorCode || fundamentals.error)) || ''
+      ) || 'Loading fundamentals...';
+      ui.renderFundamentals(fundamentals, asset, faMsg);
+    } else {
+      ui.renderFundamentals(null, asset, 'Loading fundamentals...');
+    }
     if (!state.news[assetKey(asset)]) {
       hydrateAssetNewsFromCache(asset, 1000 * 60 * 60 * 24 * 3);
     }
@@ -2198,6 +2344,11 @@
     }).catch(function () {
       return null;
     });
+    if (faSourceEnabled) {
+      refreshAssetFundamentals(asset, { force: false }).catch(function () {
+        return null;
+      });
+    }
   }
 
   function renderUsefulLinks(asset) {
@@ -3131,6 +3282,121 @@
     });
   }
 
+  // Fetches fundamentals for the active asset using the dedicated long-lived FA cache path.
+  function refreshAssetFundamentals(asset, options) {
+    options = options || {};
+    if (!asset || !PT.FundamentalsAPI || typeof PT.FundamentalsAPI.getAssetFundamentals !== 'function') {
+      return Promise.resolve(null);
+    }
+    if (!fundamentalsSourceEnabled(asset.type === 'crypto' ? 'crypto' : 'stock')) {
+      return Promise.resolve({ disabled: true });
+    }
+
+    var cacheKey = fundamentalsCacheKeyForAsset(asset) || assetKey(asset);
+    var existing = getFundamentalsSnapshot(asset);
+    var lastLocal = Number(existing && (existing.localFetchedAt || existing.fetchedAt || 0) || 0);
+    var existingIsError = !!(existing && !existing.panel && (existing.error || existing.errorCode || existing.errorDetail));
+    var existingErrorText = String(existing && (existing.errorDetail || existing.errorCode || existing.error || '') || '').toLowerCase();
+    var legacyGenericError = existingIsError && (
+      existingErrorText.indexOf('temporarily unavailable') >= 0 ||
+      existingErrorText.indexOf('no fundamentals snapshot yet') >= 0 ||
+      existingErrorText.indexOf('legacy endpoint') >= 0
+    );
+    var freshnessWindowMs = existingIsError
+      ? (legacyGenericError ? 0 : FUNDAMENTALS_ERROR_RETRY_MS)
+      : FUNDAMENTALS_LOCAL_FRESH_MS;
+    if (!options.force && existing && (Date.now() - lastLocal) <= freshnessWindowMs) {
+      if (state.app.apiDebugEnabled) {
+        try {
+          console.debug('[FA]', 'cache hit', cacheKey);
+        } catch (err) {}
+      }
+      return Promise.resolve(existing);
+    }
+
+    var lastRequestStamp = Number(FUNDAMENTALS_REQUEST_STAMPS[cacheKey] || 0) || 0;
+    if (!options.force && lastRequestStamp && (Date.now() - lastRequestStamp) <= 15000) {
+      if (state.app.apiDebugEnabled) {
+        try {
+          console.debug('[FA]', 'request cooldown hit', cacheKey);
+        } catch (err) {}
+      }
+      return Promise.resolve(existing || null);
+    }
+
+    if (FUNDAMENTALS_IN_FLIGHT[cacheKey]) return FUNDAMENTALS_IN_FLIGHT[cacheKey];
+    FUNDAMENTALS_REQUEST_STAMPS[cacheKey] = Date.now();
+
+    if (state.app.apiDebugEnabled) {
+      try {
+        console.debug('[FA]', 'cache miss', cacheKey, 'force=', !!options.force);
+      } catch (err) {}
+    }
+
+    FUNDAMENTALS_IN_FLIGHT[cacheKey] = PT.FundamentalsAPI.getAssetFundamentals(asset, {
+      includeProtocol: asset.type === 'crypto' && fundamentalsProtocolSourceEnabled(),
+      force: !!options.force
+    }).then(function (payload) {
+      setFundamentalsSnapshot(asset, payload);
+      if (state.app.apiDebugEnabled) {
+        try {
+          console.debug(
+            '[FA]',
+            'loaded',
+            cacheKey,
+            payload && payload.panel ? (payload.panel.qualityLabel || payload.panel.label || 'n/a') : 'n/a',
+            payload && payload.panel ? (payload.panel.valuationLabel || 'n/a') : 'n/a',
+            payload && payload.panel ? payload.panel.reasons : []
+          );
+        } catch (err) {}
+      }
+      var selected = getSelectedAsset(state.app.mode);
+      if (selected && selected.id === asset.id && selected.type === asset.type) {
+        renderDetails();
+      }
+      return payload;
+    }).catch(function (err) {
+      if (state.app.apiDebugEnabled) {
+        try {
+          console.debug('[FA]', 'load failed', cacheKey, (err && err.message) || 'unknown');
+        } catch (e) {}
+      }
+      if (existing && existing.panel) return existing;
+      var rawCode = String((err && err.message) || 'fundamentals_failed').trim() || 'fundamentals_failed';
+      var friendly = normalizeFundamentalsErrorMessage(rawCode) || 'Fundamentals unavailable.';
+      var errorSnapshot = Object.assign({}, existing || {}, {
+        assetType: asset.type === 'crypto' ? 'crypto' : 'stock',
+        symbol: asset.type === 'stock' ? String(asset.yahooSymbol || asset.symbol || '').trim().toUpperCase() : undefined,
+        coinId: asset.type === 'crypto' ? String(asset.coinId || asset.id || '').trim().toLowerCase() : undefined,
+        panel: null,
+        error: friendly,
+        errorCode: rawCode,
+        errorDetail: friendly,
+        note: friendly,
+        fetchedAt: Number(existing && existing.fetchedAt || 0) || Date.now()
+      });
+      setFundamentalsSnapshot(asset, errorSnapshot);
+      var selectedAsset = getSelectedAsset(state.app.mode);
+      if (selectedAsset && selectedAsset.id === asset.id && selectedAsset.type === asset.type) {
+        renderDetails();
+      }
+      return errorSnapshot;
+    }).finally(function () {
+      delete FUNDAMENTALS_IN_FLIGHT[cacheKey];
+    });
+
+    return FUNDAMENTALS_IN_FLIGHT[cacheKey];
+  }
+
+  // Forces/loads fundamentals for the currently selected asset in the active mode.
+  function refreshSelectedFundamentals(force) {
+    var selected = getSelectedAsset(state.app.mode);
+    if (!selected) return Promise.resolve(null);
+    return refreshAssetFundamentals(selected, { force: !!force }).catch(function () {
+      return null;
+    });
+  }
+
   function refreshCryptoGlobalMetrics() {
     var key = 'crypto:global:metrics';
     return cacheWrap(key, 1000 * 30, function () {
@@ -3663,11 +3929,16 @@
       });
     });
     ui.el.refreshBtn.addEventListener('click', function () {
+      playRefreshButtonFeedback();
       if (state.app.mode === 'stocks') {
-        refreshStocksQuotesOnly({ force: true, reason: 'manual' });
+        refreshStocksQuotesOnly({ force: true, reason: 'manual' }).finally(function () {
+          refreshSelectedFundamentals(true);
+        });
         return;
       }
-      refreshVisibleData();
+      refreshVisibleData().finally(function () {
+        refreshSelectedFundamentals(true);
+      });
     });
     if (ui.el.stocksAutoRefreshToggle) {
       ui.el.stocksAutoRefreshToggle.addEventListener('click', function () {

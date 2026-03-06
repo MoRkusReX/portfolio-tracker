@@ -154,6 +154,14 @@
         detailChartTimeframes: qs('detailChartTimeframes'),
         externalLink: qs('externalLink'),
         marketDataGrid: qs('marketDataGrid'),
+        fundamentalsPanel: qs('fundamentalsPanel'),
+        fundamentalsAssetLabel: qs('fundamentalsAssetLabel'),
+        fundamentalsTitle: qs('fundamentalsTitle'),
+        fundamentalsOverallPill: qs('fundamentalsOverallPill'),
+        fundamentalsMeta: qs('fundamentalsMeta'),
+        fundamentalsSummary: qs('fundamentalsSummary'),
+        fundamentalsGrid: qs('fundamentalsGrid'),
+        fundamentalsReasons: qs('fundamentalsReasons'),
         btcDominancePanel: qs('btcDominancePanel'),
         btcDominanceLabel: qs('btcDominanceLabel'),
         btcDominanceValue: qs('btcDominanceValue'),
@@ -227,6 +235,125 @@
         autocompleteList: qs('autocompleteList'),
         assetRowTemplate: qs('assetRowTemplate')
       };
+      this._activeFundamentalsHelpTarget = null;
+      this._pendingFundamentalsHelpTarget = null;
+      this._fundamentalsHelpShowTimer = null;
+      this._fundamentalsHelpTooltipEl = null;
+      this._fundamentalsHelpBound = false;
+      this._bindFundamentalsHelpTooltip();
+    },
+    _ensureFundamentalsHelpTooltipEl: function () {
+      if (this._fundamentalsHelpTooltipEl && this._fundamentalsHelpTooltipEl.parentNode) return this._fundamentalsHelpTooltipEl;
+      var tip = document.createElement('div');
+      tip.className = 'fundamentals-help-tooltip';
+      tip.setAttribute('role', 'tooltip');
+      tip.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(tip);
+      this._fundamentalsHelpTooltipEl = tip;
+      return tip;
+    },
+    _positionFundamentalsHelpTooltip: function (target) {
+      var tip = this._fundamentalsHelpTooltipEl;
+      if (!tip || !target || !target.getBoundingClientRect) return;
+      var rect = target.getBoundingClientRect();
+      var tipRect = tip.getBoundingClientRect();
+      var margin = 8;
+      var top = rect.top - tipRect.height - 10;
+      if (top < margin) top = rect.bottom + 10;
+      if ((top + tipRect.height) > (window.innerHeight - margin)) {
+        top = Math.max(margin, window.innerHeight - tipRect.height - margin);
+      }
+      var left = rect.right - tipRect.width;
+      if (left < margin) left = margin;
+      if ((left + tipRect.width) > (window.innerWidth - margin)) {
+        left = Math.max(margin, window.innerWidth - tipRect.width - margin);
+      }
+      tip.style.top = Math.round(top) + 'px';
+      tip.style.left = Math.round(left) + 'px';
+    },
+    _clearFundamentalsHelpPending: function () {
+      if (this._fundamentalsHelpShowTimer) {
+        clearTimeout(this._fundamentalsHelpShowTimer);
+        this._fundamentalsHelpShowTimer = null;
+      }
+      this._pendingFundamentalsHelpTarget = null;
+    },
+    _scheduleFundamentalsHelpTooltip: function (target) {
+      if (!target) return;
+      if (this._activeFundamentalsHelpTarget === target) return;
+      this._clearFundamentalsHelpPending();
+      this._pendingFundamentalsHelpTarget = target;
+      var self = this;
+      this._fundamentalsHelpShowTimer = setTimeout(function () {
+        self._fundamentalsHelpShowTimer = null;
+        if (self._pendingFundamentalsHelpTarget !== target) return;
+        self._pendingFundamentalsHelpTarget = null;
+        self._showFundamentalsHelpTooltip(target);
+      }, 500);
+    },
+    _showFundamentalsHelpTooltip: function (target) {
+      if (!target) return;
+      var text = String(target.getAttribute('data-tooltip') || '').trim();
+      if (!text) return;
+      var tip = this._ensureFundamentalsHelpTooltipEl();
+      tip.textContent = text;
+      tip.classList.add('is-visible');
+      tip.setAttribute('aria-hidden', 'false');
+      this._activeFundamentalsHelpTarget = target;
+      this._positionFundamentalsHelpTooltip(target);
+    },
+    _hideFundamentalsHelpTooltip: function () {
+      this._clearFundamentalsHelpPending();
+      var tip = this._fundamentalsHelpTooltipEl;
+      if (tip) {
+        tip.classList.remove('is-visible');
+        tip.setAttribute('aria-hidden', 'true');
+      }
+      this._activeFundamentalsHelpTarget = null;
+    },
+    _bindFundamentalsHelpTooltip: function () {
+      if (this._fundamentalsHelpBound || !this.el || !this.el.fundamentalsGrid) return;
+      var self = this;
+      var root = this.el.fundamentalsGrid;
+      function findHelp(node) {
+        return node && node.closest ? node.closest('.fundamentals-metric__help') : null;
+      }
+      root.addEventListener('mouseover', function (event) {
+        var target = findHelp(event.target);
+        if (!target) return;
+        self._scheduleFundamentalsHelpTooltip(target);
+      });
+      root.addEventListener('mouseout', function (event) {
+        var target = findHelp(event.target);
+        if (!target) return;
+        var next = event.relatedTarget;
+        if (next && (target.contains(next) || findHelp(next) === target)) return;
+        self._hideFundamentalsHelpTooltip();
+      });
+      root.addEventListener('focusin', function (event) {
+        var target = findHelp(event.target);
+        if (!target) return;
+        self._scheduleFundamentalsHelpTooltip(target);
+      });
+      root.addEventListener('focusout', function (event) {
+        var target = findHelp(event.target);
+        if (!target) return;
+        var next = event.relatedTarget;
+        if (next && (target.contains(next) || findHelp(next) === target)) return;
+        self._hideFundamentalsHelpTooltip();
+      });
+      window.addEventListener('resize', function () {
+        if (self._activeFundamentalsHelpTarget) {
+          self._positionFundamentalsHelpTooltip(self._activeFundamentalsHelpTarget);
+        }
+      });
+      window.addEventListener('scroll', function () {
+        if (self._activeFundamentalsHelpTarget) self._hideFundamentalsHelpTooltip();
+      }, true);
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) self._hideFundamentalsHelpTooltip();
+      });
+      this._fundamentalsHelpBound = true;
     },
     fmtCurrency: fmtCurrency,
     fmtNumber: fmtNumber,
@@ -640,6 +767,230 @@
         var labelClass = slugLabel(pair[0]);
         return '<div class="mini-card mini-card--' + esc(labelClass) + '"><span>' + esc(pair[0]) + '</span><strong class="' + valueClass.trim() + '">' + esc(pair[1]) + '</strong></div>';
       }).join('');
+    },
+    renderFundamentals: function (payload, asset, fallbackMsg) {
+      if (!this.el.fundamentalsPanel || !this.el.fundamentalsGrid) return;
+      if (!asset) {
+        if (this.el.fundamentalsAssetLabel) this.el.fundamentalsAssetLabel.textContent = 'No asset selected';
+        if (this.el.fundamentalsTitle) this.el.fundamentalsTitle.textContent = 'Fundamentals';
+        if (this.el.fundamentalsOverallPill) {
+          this.el.fundamentalsOverallPill.className = 'indicator-pill indicator-pill--neutral';
+          this.el.fundamentalsOverallPill.textContent = 'n/a';
+        }
+        if (this.el.fundamentalsMeta) this.el.fundamentalsMeta.textContent = fallbackMsg || 'Select an asset to load fundamentals.';
+        if (this.el.fundamentalsSummary) this.el.fundamentalsSummary.innerHTML = '';
+        this.el.fundamentalsGrid.innerHTML = '';
+        if (this.el.fundamentalsReasons) this.el.fundamentalsReasons.innerHTML = '';
+        return;
+      }
+      if (this.el.fundamentalsAssetLabel) this.el.fundamentalsAssetLabel.textContent = asset.symbol || asset.name || 'Selected asset';
+
+      function overallClass(label) {
+        var tone = overallTone(label);
+        return 'indicator-pill indicator-pill--' + tone;
+      }
+
+      function overallTone(label) {
+        var v = String(label || '').toLowerCase();
+        if (v.indexOf('low dilution') >= 0) return 'bullish';
+        if (v.indexOf('moderate dilution') >= 0 || v.indexOf('unknown dilution') >= 0) return 'neutral';
+        if (v.indexOf('high dilution') >= 0) return 'bearish';
+        if (v.indexOf('strong') >= 0 || v === 'healthy' || v.indexOf('bullish') >= 0 || v === 'cheap') return 'bullish';
+        if (v.indexOf('weak') >= 0 || v.indexOf('risk') >= 0 || v.indexOf('bearish') >= 0) return 'bearish';
+        if (v.indexOf('expensive') >= 0) return 'bearish';
+        return 'neutral';
+      }
+
+      function chipClass(status) {
+        var v = String(status || '').toLowerCase();
+        if (v === 'bullish' || v === 'healthy' || v === 'cheap' || v === 'strong') return 'fundamentals-chip fundamentals-chip--bullish';
+        if (v === 'risk' || v === 'weak' || v === 'expensive' || v === 'bearish') return 'fundamentals-chip fundamentals-chip--bearish';
+        return 'fundamentals-chip fundamentals-chip--neutral';
+      }
+
+      function daysUntilDateOnly(dateOnly) {
+        var raw = String(dateOnly || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+        var parts = raw.split('-');
+        var y = Number(parts[0]);
+        var m = Number(parts[1]);
+        var d = Number(parts[2]);
+        if (!isFinite(y) || !isFinite(m) || !isFinite(d)) return null;
+        var target = new Date(y, m - 1, d);
+        var now = new Date();
+        var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        var diffMs = target.getTime() - today.getTime();
+        if (!isFinite(diffMs)) return null;
+        return Math.round(diffMs / (1000 * 60 * 60 * 24));
+      }
+
+      function metricExplanation(metric) {
+        var byId = {
+          'revenue-growth-yoy': 'Revenue Growth YoY: Percentage change in company revenue compared to the same period last year. Higher growth usually indicates expanding demand and business momentum.',
+          'eps-growth-yoy': 'EPS Growth YoY: Year-over-year growth in earnings per share. Rising EPS suggests improving profitability and shareholder value.',
+          'margin': 'Operating Margin: Percentage of revenue left after operating expenses. Higher margins mean the company runs its core business more efficiently.',
+          'free-cash-flow': 'Free Cash Flow: Cash remaining after operating expenses and capital investments. Positive FCF means the company generates real cash it can use for growth, debt reduction, or shareholder returns.',
+          'debt-equity': 'Debt / Equity: Compares company debt to shareholder equity. Lower values usually indicate lower financial risk and a stronger balance sheet.',
+          'roe': 'ROE: Profit generated for each dollar of shareholder equity. Higher ROE generally means the company uses investor capital efficiently.',
+          'piotroski': 'Piotroski Score: A 0-9 score measuring financial strength using profitability, leverage, and operating efficiency signals. Scores of 7 or higher typically indicate strong fundamentals.',
+          'altman-z': 'Altman Z-Score: Measures bankruptcy risk using profitability, leverage, liquidity, and activity ratios. Scores above 3 suggest a financially healthy company.',
+          'pe': 'P/E: Stock price divided by earnings per share. Lower values may indicate cheaper valuation, while higher values can reflect growth expectations.',
+          'ps': 'P/S: Company valuation relative to its revenue. Lower values suggest a cheaper valuation compared to sales.',
+          'ev-ebitda': 'EV/EBITDA: Compares total company value to operating earnings before non-cash expenses. Lower ratios generally indicate a more attractive valuation.',
+          'price-to-fcf': 'P/FCF: Stock price relative to free cash flow per share. Lower values suggest investors are paying less for the company\'s cash generation.'
+        };
+        var id = String(metric && metric.id || '').trim().toLowerCase();
+        var text = byId[id] || String(metric && metric.hint || '').trim();
+        if (!text) {
+          var label = String(metric && metric.label || 'Metric').trim();
+          text = label + ': Core fundamentals metric used in the FA panel.';
+        }
+        return text;
+      }
+
+      var panel = payload && payload.panel ? payload.panel : null;
+      if (!panel) {
+        var emptyMessage = String(
+          (payload && (payload.errorDetail || payload.error || payload.detail || payload.note)) ||
+          fallbackMsg ||
+          'No fundamentals snapshot yet.'
+        ).trim();
+        if (!emptyMessage) emptyMessage = 'No fundamentals snapshot yet.';
+        if (this.el.fundamentalsTitle) this.el.fundamentalsTitle.textContent = asset.type === 'crypto' ? 'Token Fundamentals' : 'Fundamentals';
+        if (this.el.fundamentalsOverallPill) {
+          this.el.fundamentalsOverallPill.className = 'indicator-pill indicator-pill--neutral';
+          this.el.fundamentalsOverallPill.textContent = 'n/a';
+        }
+        if (this.el.fundamentalsMeta) this.el.fundamentalsMeta.textContent = emptyMessage;
+        if (this.el.fundamentalsSummary) this.el.fundamentalsSummary.innerHTML = '';
+        this.el.fundamentalsGrid.innerHTML = '<div class="muted">' + esc(emptyMessage) + '</div>';
+        if (this.el.fundamentalsReasons) this.el.fundamentalsReasons.innerHTML = '';
+        return;
+      }
+
+      var qualityScore = isFinite(Number(panel.qualityScore)) ? Number(panel.qualityScore) : (isFinite(Number(panel.score)) ? Number(panel.score) : 0);
+      var qualityScoreOutOf = isFinite(Number(panel.qualityScoreOutOf)) ? Number(panel.qualityScoreOutOf) : (isFinite(Number(panel.scoreOutOf)) ? Number(panel.scoreOutOf) : null);
+      var qualityLabel = String(panel.qualityLabel || panel.label || 'Mixed');
+      var valuationLabel = String(panel.valuationLabel || 'n/a');
+      var sections = Array.isArray(panel.sections) ? panel.sections : [];
+      var valuationSummaryText = String(panel.valuationSummaryText || '').trim();
+      var reasons = Array.isArray(panel.reasons) ? panel.reasons : [];
+      var reasonGroups = Array.isArray(panel.reasonGroups) ? panel.reasonGroups : [];
+      var fetchedAt = Number(payload && payload.fetchedAt || 0) || 0;
+      var isStockAsset = !!(asset && asset.type === 'stock');
+      var nextEarningsDate = String(panel.nextEarningsDate || '').trim();
+      var nextEarningsRelative = String(panel.nextEarningsRelative || '').trim();
+      var earningsState = String(panel.earningsState || '').trim();
+      var nextEarningsText = nextEarningsDate || 'n/a';
+      var nextEarningsDaysAway = daysUntilDateOnly(nextEarningsDate);
+      var showEarningsSoonAlert = nextEarningsDaysAway != null && nextEarningsDaysAway >= 0 && nextEarningsDaysAway < 7;
+      if (nextEarningsRelative && nextEarningsRelative.toLowerCase() !== nextEarningsText.toLowerCase()) {
+        nextEarningsText += ' • ' + nextEarningsRelative;
+      }
+
+      if (!valuationSummaryText || valuationSummaryText === valuationLabel) {
+        var valuationSection = sections.find(function (section) {
+          var sid = String(section && section.id || '').toLowerCase();
+          var title = String(section && section.title || '').toLowerCase();
+          return sid.indexOf('valuation') >= 0 || title.indexOf('valuation') >= 0;
+        }) || null;
+        var valuationParts = [];
+        if (valuationSection && Array.isArray(valuationSection.metrics)) {
+          valuationSection.metrics.forEach(function (metric) {
+            var metricLabel = String(metric && metric.label || '').trim();
+            var metricStatus = String(metric && metric.status || '').trim();
+            if (!metricLabel || !metricStatus) return;
+            if (metricStatus.toLowerCase() === 'neutral' || metricStatus.toLowerCase() === 'n/a') return;
+            valuationParts.push(metricLabel + ' ' + metricStatus);
+          });
+        }
+        valuationSummaryText = valuationParts.length
+          ? (valuationLabel + ' • ' + valuationParts.join(', '))
+          : (valuationLabel || 'n/a');
+      }
+
+      if (this.el.fundamentalsTitle) {
+        this.el.fundamentalsTitle.textContent = panel.title || (asset.type === 'crypto' ? 'Token Fundamentals' : 'Fundamentals');
+      }
+      if (this.el.fundamentalsOverallPill) {
+        this.el.fundamentalsOverallPill.className = overallClass(qualityLabel);
+        this.el.fundamentalsOverallPill.textContent = 'Quality: ' + qualityLabel;
+      }
+      if (this.el.fundamentalsMeta) {
+        var meta = panel.note || '';
+        if (!meta && fetchedAt > 0) meta = 'Updated ' + new Date(fetchedAt).toLocaleString();
+        this.el.fundamentalsMeta.textContent = meta || (fallbackMsg || 'Fundamentals ready.');
+      }
+        if (this.el.fundamentalsSummary) {
+        var qualityScoreText = esc(String(qualityScore) + (qualityScoreOutOf != null ? ('/' + String(qualityScoreOutOf)) : ''));
+        var earningsAlertHtml = showEarningsSoonAlert
+          ? '<span class="fundamentals-earnings-alert" aria-hidden="true" title="Next earnings is within 7 days">!</span>'
+          : '';
+        var earningsStatHtml = isStockAsset
+          ? ('<div class="fundamentals-summary__stat fundamentals-summary__stat--earnings' + (showEarningsSoonAlert ? ' fundamentals-summary__stat--earnings-soon' : '') + '">' +
+              '<div class="fundamentals-summary__stat-label-row"><span>Next Earnings</span>' + earningsAlertHtml + '</div>' +
+              '<strong>' + esc(nextEarningsText) + '</strong>' +
+              (earningsState ? ('<small>' + esc(earningsState) + '</small>') : '') +
+            '</div>')
+          : '';
+        this.el.fundamentalsSummary.innerHTML =
+          '<div class="fundamentals-summary__badges fundamentals-summary__badges--grid">' +
+            '<div class="fundamentals-summary__badge fundamentals-summary__badge--' + overallTone(qualityLabel) + '">' +
+              '<span class="fundamentals-summary__badge-label">Quality</span>' +
+              '<span class="' + overallClass(qualityLabel) + '">' + esc(qualityLabel) + '</span>' +
+            '</div>' +
+            '<div class="fundamentals-summary__badge fundamentals-summary__badge--' + overallTone(valuationLabel) + '">' +
+              '<span class="fundamentals-summary__badge-label">Valuation</span>' +
+              '<span class="' + overallClass(valuationLabel) + '">' + esc(valuationLabel) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="fundamentals-summary__stats">' +
+            '<div class="fundamentals-summary__stat">' +
+              '<span>Quality Score</span>' +
+              '<strong>' + qualityScoreText + '</strong>' +
+            '</div>' +
+            '<div class="fundamentals-summary__stat">' +
+              '<span>Valuation Summary</span>' +
+              '<strong>' + esc(valuationSummaryText) + '</strong>' +
+            '</div>' +
+            earningsStatHtml +
+          '</div>' +
+          '<div class="fundamentals-summary__score">Quality and valuation are scored independently.</div>';
+      }
+
+      this.el.fundamentalsGrid.innerHTML = sections.map(function (section) {
+        var metrics = Array.isArray(section && section.metrics) ? section.metrics : [];
+        return '<section class="fundamentals-section">' +
+          '<div class="fundamentals-section__title-row"><span class="fundamentals-section__title">' + esc(section && section.title ? section.title : 'Metrics') + '</span><span class="fundamentals-section__count">' + esc(String(metrics.length)) + ' metrics</span></div>' +
+          '<div class="fundamentals-section__grid">' +
+            metrics.map(function (metric) {
+              var explain = metricExplanation(metric);
+              return '<article class="fundamentals-metric">' +
+                '<div class="fundamentals-metric__head"><span>' + esc(metric && metric.label ? metric.label : '') + '</span><span class="' + chipClass(metric && metric.status) + '">' + esc(metric && metric.status ? metric.status : 'Neutral') + '</span></div>' +
+                '<strong>' + esc(metric && metric.display ? metric.display : 'n/a') + '</strong>' +
+                '<span class="fundamentals-metric__help" tabindex="0" role="button" aria-label="What is ' + esc(metric && metric.label ? metric.label : 'this metric') + '?" data-tooltip="' + esc(explain) + '">?</span>' +
+              '</article>';
+            }).join('') +
+          '</div>' +
+        '</section>';
+      }).join('');
+
+      if (this.el.fundamentalsReasons) {
+        if (reasonGroups.length) {
+          this.el.fundamentalsReasons.innerHTML = reasonGroups.map(function (group) {
+            var items = Array.isArray(group && group.items) ? group.items : [];
+            if (!items.length) return '';
+            return '<div class="fundamentals-reasons__group">' +
+              '<div class="fundamentals-reasons__title">' + esc(group && group.title ? group.title : 'Reasons') + '</div>' +
+              '<div class="fundamentals-reasons__list">' + items.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</div>' +
+            '</div>';
+          }).join('');
+        } else {
+          this.el.fundamentalsReasons.innerHTML = reasons.length
+            ? ('<div class="fundamentals-reasons__title">Why</div><div class="fundamentals-reasons__list">' + reasons.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</div>')
+            : '';
+        }
+      }
     },
     renderNews: function (items, errorMsg) {
       if (!items || !items.length) {

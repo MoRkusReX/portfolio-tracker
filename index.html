@@ -278,6 +278,25 @@
         </section>
         <div id="indicatorsTimeframes" class="indicators-timeframes"></div>
       </aside>
+
+      <aside class="right-panel glass" id="fundamentalsPanel">
+        <div class="section-header">
+          <div>
+            <h3>Fundamentals</h3>
+            <div id="fundamentalsAssetLabel" class="muted">No asset selected</div>
+          </div>
+        </div>
+        <section class="panel-block panel-block--fundamentals">
+          <div class="panel-block__head">
+            <h4 id="fundamentalsTitle">Fundamentals</h4>
+            <span id="fundamentalsOverallPill" class="indicator-pill indicator-pill--neutral">n/a</span>
+          </div>
+          <div id="fundamentalsMeta" class="muted indicator-meta">Select an asset to load fundamentals.</div>
+          <div id="fundamentalsSummary" class="fundamentals-summary"></div>
+          <div id="fundamentalsGrid" class="fundamentals-grid"></div>
+          <div id="fundamentalsReasons" class="fundamentals-reasons"></div>
+        </section>
+      </aside>
     </main>
   </div>
 
@@ -518,6 +537,7 @@
   <script src="scripts/api/news.js"></script>
   <script src="scripts/api/stocktwits.js"></script>
   <script src="scripts/api/events.js"></script>
+  <script src="scripts/api/fundamentals.js"></script>
   <script src="scripts/indicator-engine.js"></script>
   <script src="scripts/api/indicators.js"></script>
   <script src="scripts/particles.js"></script>

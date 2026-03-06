@@ -214,7 +214,8 @@ html[data-layout="wide"] .app-shell {
 
 .main-panel,
 .side-panel,
-.indicators-panel {
+.indicators-panel,
+.right-panel {
   min-width: 0;
   min-height: 0;
 }
@@ -242,9 +243,41 @@ html[data-layout="wide"] .app-shell {
   overflow: auto;
 }
 
+.right-panel {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  overflow: auto;
+}
+
 html[data-layout="wide"] .layout {
   grid-template-columns: minmax(0, 1.6fr) minmax(500px, 1.12fr) minmax(340px, 0.82fr);
   align-items: stretch;
+}
+
+@media (min-width: 1361px) {
+  .app-shell {
+    max-width: 1756px;
+    margin: 0 auto;
+    overflow: hidden;
+  }
+
+  html[data-layout="wide"] .app-shell {
+    max-width: min(2656px, 98vw);
+  }
+
+  .layout {
+    width: 100%;
+    grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.88fr) minmax(300px, 0.72fr) minmax(300px, 0.72fr);
+    margin-left: 0;
+  }
+
+  html[data-layout="wide"] .layout {
+    width: 100%;
+    grid-template-columns: minmax(0, 1.6fr) minmax(500px, 1.12fr) minmax(340px, 0.82fr) minmax(340px, 0.82fr);
+    margin-left: 0;
+  }
 }
 
 html[data-layout="wide"] .portfolio-grid {
@@ -365,7 +398,8 @@ html[data-layout="wide"] .portfolio-grid {
     grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.9fr);
   }
 
-  .indicators-panel {
+  .indicators-panel,
+  .right-panel {
     grid-column: 1 / -1;
     max-height: none;
   }
@@ -389,7 +423,8 @@ html[data-layout="wide"] .portfolio-grid {
 
   .main-panel,
   .side-panel,
-  .indicators-panel {
+  .indicators-panel,
+  .right-panel {
     max-height: none;
     overflow: visible;
   }
@@ -412,6 +447,22 @@ html[data-layout="wide"] .portfolio-grid {
   }
 
   .indicators-panel.indicators-panel--embedded-mobile > .section-header {
+    margin-bottom: 0.55rem;
+  }
+
+  .right-panel.right-panel--embedded-mobile {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .right-panel.right-panel--embedded-mobile > .section-header {
     margin-bottom: 0.55rem;
   }
 }
@@ -523,12 +574,14 @@ html[data-layout="wide"] .portfolio-grid {
 
   .main-panel,
   .side-panel,
-  .indicators-panel {
+  .indicators-panel,
+  .right-panel {
     gap: 0.58rem;
   }
 
   .side-panel,
-  .indicators-panel {
+  .indicators-panel,
+  .right-panel {
     padding: 0.72rem;
   }
 }
