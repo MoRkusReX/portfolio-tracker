@@ -9,6 +9,11 @@
     return Number(n).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
   }
 
+  function fmtHeroCurrency(n) {
+    if (!isFinite(Number(n))) return '$0';
+    return Number(n).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  }
+
   function fmtCompactNumber(n) {
     var value = Number(n);
     if (!isFinite(value)) return 'n/a';
@@ -613,15 +618,15 @@
       });
     },
     renderTotals: function (totals, hideHoldings) {
-      this.el.totalValue.textContent = hideHoldings ? 'Hidden' : fmtCurrency(totals.value);
+      this.el.totalValue.textContent = hideHoldings ? 'Hidden' : fmtHeroCurrency(totals.value);
       var pct = totals.cost ? (totals.pl / totals.cost) * 100 : 0;
-      this.el.totalPL.textContent = hideHoldings ? pctText(pct) : (fmtCurrency(totals.pl) + ' (' + pctText(pct) + ')');
+      this.el.totalPL.textContent = hideHoldings ? pctText(pct) : (fmtHeroCurrency(totals.pl) + ' (' + pctText(pct) + ')');
       this.el.totalPL.className = 'stat-pill__value ' + pctClass(pct);
       if (this.el.totalDailyPL) {
         var dailyPct = totals.dailyPrev ? (totals.dailyPl / totals.dailyPrev) * 100 : 0;
         this.el.totalDailyPL.textContent = hideHoldings
           ? pctText(dailyPct)
-          : (fmtCurrency(totals.dailyPl) + ' (' + pctText(dailyPct) + ')');
+          : (fmtHeroCurrency(totals.dailyPl) + ' (' + pctText(dailyPct) + ')');
         this.el.totalDailyPL.className = 'stat-pill__value ' + pctClass(dailyPct);
       }
     },
@@ -1033,6 +1038,7 @@
       this.el.twitterSection.innerHTML = html;
     },
     renderEvents: function (items) {
+      if (!this.el.eventsList) return;
       if (!items || !items.length) {
         this.el.eventsList.innerHTML = '<div class="muted">No events.</div>';
         return;

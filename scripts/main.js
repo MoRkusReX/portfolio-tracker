@@ -2281,7 +2281,6 @@
         ui.renderNews([], 'Select an asset to load news.');
       }
       ui.renderTwitter({ message: 'Select an asset to load Stocktwits feed.', searchUrl: '#', linkLabel: 'Open Stocktwits' });
-      ui.renderEvents([]);
       ui.renderFundamentals(null, null, 'Select an asset to load fundamentals.');
       chartMgr.renderAssetLine(ui.el.assetChart, ui.el.lineFallback, [], [], '');
       return;
@@ -2318,7 +2317,6 @@
       ui.renderNews(state.news[assetKey(asset)] || [], 'News unavailable (check network/CORS); cached news appears when available.');
     }
     ui.renderTwitter(state.twitter[assetKey(asset)] || PT.TwitterAPI.getPlaceholder(asset));
-    ui.renderEvents(state.events[assetKey(asset)] || []);
     var history = (asset.type === 'crypto' ? state.history.crypto : state.history.stocks)[asset.id] || [];
     var cachedTfRows = getCachedAny(chartCacheKeyForAsset(asset, detailTf));
     if (Array.isArray(cachedTfRows) && cachedTfRows.length) history = cachedTfRows;
@@ -3456,9 +3454,6 @@
     ASSET_DETAIL_REFRESH_STAMPS[detailStampKey] = Date.now();
     setStatus('Refreshing ' + asset.symbol + '...');
     var tasks = [];
-    if (!(options.onSelect && asset.type === 'stock')) {
-      tasks.push(refreshAssetEvents(asset));
-    }
     refreshAssetTwitter(asset);
     tasks.push(refreshAssetQuote(asset, {
       skipYahooExtras: !!(options.onSelect && asset.type === 'stock')
@@ -3682,12 +3677,11 @@
       ];
       if (selectedCrypto) {
         jobsCrypto.push(
-          Promise.allSettled([refreshAssetHistory(selectedCrypto), refreshAssetNews(selectedCrypto), refreshAssetEvents(selectedCrypto)])
+          Promise.allSettled([refreshAssetHistory(selectedCrypto), refreshAssetNews(selectedCrypto)])
             .then(function (results) {
               return {
                 historyOk: results[0] && results[0].status === 'fulfilled',
-                newsOk: results[1] && results[1].status === 'fulfilled',
-                eventsOk: results[2] && results[2].status === 'fulfilled'
+                newsOk: results[1] && results[1].status === 'fulfilled'
               };
             })
         );
@@ -3699,7 +3693,7 @@
         var detail = selectedCrypto && results[3] && results[3].status === 'fulfilled' ? results[3].value : null;
         renderAll();
         var nowText = new Date().toLocaleTimeString();
-        var detailFailed = detail ? (!detail.historyOk || !detail.newsOk || !detail.eventsOk) : false;
+        var detailFailed = detail ? (!detail.historyOk || !detail.newsOk) : false;
         if (quoteMeta.updated <= 0 && quoteMeta.staleUsed > 0) {
           setStatus('Crypto quotes unavailable, using cached values • ' + nowText);
         } else if (quoteMeta.updated <= 0) {
@@ -3714,14 +3708,12 @@
 
     setStatus('Refreshing ' + rawItems.length + ' assets...');
     var jobs = rawItems.map(function (asset) {
-      var eventJob = refreshAssetEvents(asset);
       refreshAssetTwitter(asset);
-      return Promise.allSettled([refreshAssetQuote(asset), eventJob]).then(function (results) {
+      return Promise.allSettled([refreshAssetQuote(asset)]).then(function (results) {
         return {
           kind: 'asset',
           asset: asset,
-          quoteOk: results[0] && results[0].status === 'fulfilled',
-          eventsOk: results[1] && results[1].status === 'fulfilled'
+          quoteOk: results[0] && results[0].status === 'fulfilled'
         };
       });
     });
@@ -3757,7 +3749,7 @@
         var x = r.value || {};
         if (x.kind === 'asset') {
           if (!x.quoteOk) quoteFail++;
-          if (!x.quoteOk || !x.eventsOk) hadAnyFailure = true;
+          if (!x.quoteOk) hadAnyFailure = true;
         } else if (x.kind === 'selectedDetail') {
           if (!x.historyOk || !x.newsOk) hadAnyFailure = true;
         } else if (x.kind === 'cryptoGlobal') {
