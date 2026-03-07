@@ -24,11 +24,14 @@
   var FUNDAMENTALS_LOCAL_FRESH_MS = 1000 * 60 * 30;
   var FUNDAMENTALS_ERROR_RETRY_MS = 1000 * 60 * 3;
   var EXPLORER_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
+  var EXPLORER_FAVORITES_LOCAL_CACHE_KEY = 'explorer:favorites:local';
   var REFRESH_BTN_FEEDBACK_TIMER = null;
+  var HOLDINGS_SCRAMBLE_SEED = id();
   var PORTFOLIO_REMOTE_REV = 0;
   var PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = false;
   var INDICATOR_EXPLORER = {
     mode: 'stocks',
+    view: 'all',
     query: '',
     results: [],
     selected: null,
@@ -47,11 +50,17 @@
     newsItems: [],
     newsMeta: '',
     newsLoading: false,
+    favorites: {
+      stocks: [],
+      crypto: []
+    },
+    favoritesLoaded: false,
     sessions: {
       stocks: null,
       crypto: null
     }
   };
+  var PANEL_VIEWER = { type: null };
   var AUTO_COLORS = ['#2cb6ff', '#14f1b2', '#f59e0b', '#fb7185', '#8b5cf6', '#22c55e', '#f97316', '#38bdf8', '#eab308', '#a78bfa'];
   var DEMO_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'AVGO', 'TSLA'];
   var DEMO_CRYPTO_IDS = ['bitcoin', 'ethereum', 'tether', 'ripple', 'binancecoin', 'solana', 'usd-coin', 'dogecoin', 'cardano', 'tron'];
@@ -230,19 +239,36 @@
 
   // Plays a short visual confirmation animation on the manual refresh button.
   function playRefreshButtonFeedback() {
-    if (!ui || !ui.el || !ui.el.refreshBtn) return;
-    var btn = ui.el.refreshBtn;
+    if (!ui || !ui.el) return;
+    var buttons = [ui.el.refreshBtn, ui.el.holdingsRefreshBtn].filter(Boolean);
+    if (!buttons.length) return;
     if (REFRESH_BTN_FEEDBACK_TIMER) {
       clearTimeout(REFRESH_BTN_FEEDBACK_TIMER);
       REFRESH_BTN_FEEDBACK_TIMER = null;
     }
-    btn.classList.remove('is-clicked');
-    void btn.offsetWidth;
-    btn.classList.add('is-clicked');
-    REFRESH_BTN_FEEDBACK_TIMER = setTimeout(function () {
+    buttons.forEach(function (btn) {
       btn.classList.remove('is-clicked');
+      void btn.offsetWidth;
+      btn.classList.add('is-clicked');
+    });
+    REFRESH_BTN_FEEDBACK_TIMER = setTimeout(function () {
+      buttons.forEach(function (btn) { btn.classList.remove('is-clicked'); });
       REFRESH_BTN_FEEDBACK_TIMER = null;
     }, 560);
+  }
+
+  // Triggers the same manual refresh flow used by the main refresh button.
+  function runManualRefreshAction() {
+    playRefreshButtonFeedback();
+    if (state.app.mode === 'stocks') {
+      refreshStocksQuotesOnly({ force: true, reason: 'manual' }).finally(function () {
+        refreshSelectedFundamentals(true);
+      });
+      return;
+    }
+    refreshVisibleData().finally(function () {
+      refreshSelectedFundamentals(true);
+    });
   }
 
   function setStatus(text) {
@@ -1129,6 +1155,7 @@
       state.app.theme = savedSettings.theme === 'light' ? 'light' : 'dark';
       state.app.layoutMode = savedSettings.layoutMode === 'wide' ? 'wide' : 'narrow';
       state.app.hideHoldings = !!savedSettings.hideHoldings;
+      state.app.scrambleHoldings = !!savedSettings.scrambleHoldings;
       state.app.stocksAutoRefreshEnabled = !!savedSettings.stocksAutoRefreshEnabled;
       state.app.cryptoAutoRefreshEnabled = !!savedSettings.cryptoAutoRefreshEnabled;
       state.app.stocksAutoRefreshIntervalSec = Math.max(15, Number(savedSettings.stocksAutoRefreshIntervalSec || 600) || 600);
@@ -1169,6 +1196,7 @@
         }
       }
     }
+    if (state.app.scrambleHoldings) HOLDINGS_SCRAMBLE_SEED = id();
 
     state.app.twelveDataEnabled = (window.PT && window.PT.ApiSources && window.PT.ApiSources.getOrdered('prices', 'stock', state.app.apiSourcePrefs).indexOf('twelvedata') >= 0);
   }
@@ -1547,6 +1575,7 @@
       theme: state.app.theme,
       layoutMode: state.app.layoutMode,
       hideHoldings: !!state.app.hideHoldings,
+      scrambleHoldings: !!state.app.scrambleHoldings,
       stocksAutoRefreshEnabled: !!state.app.stocksAutoRefreshEnabled,
       cryptoAutoRefreshEnabled: !!state.app.cryptoAutoRefreshEnabled,
       stocksAutoRefreshIntervalSec: Math.max(15, Number(state.app.stocksAutoRefreshIntervalSec || 600) || 600),
@@ -1626,6 +1655,40 @@
     else state.app.selectedStocksKey = safeKey;
   }
 
+  // Returns cached overall indicator conclusion for an asset row, if available.
+  function indicatorOverallStatusForAsset(asset) {
+    var target = indicatorTargetFromAsset(asset);
+    if (!target) return 'n/a';
+    var targetKey = target.cacheKey || indicatorTargetKey(target);
+    if (!targetKey) return 'n/a';
+    var timeframes = {};
+    ['1d', '1w', '1m'].forEach(function (timeframeKey) {
+      var snapshot = getCachedAny(indicatorComputedCacheKey(targetKey, timeframeKey));
+      if (snapshot && snapshot.trendMeter) timeframes[timeframeKey] = snapshot;
+    });
+    if (!Object.keys(timeframes).length) return 'n/a';
+    if (window.PT && window.PT.IndicatorEngine && typeof window.PT.IndicatorEngine.summarizeByTimeframe === 'function') {
+      var summary = window.PT.IndicatorEngine.summarizeByTimeframe(timeframes) || {};
+      if (summary && summary.overall) return String(summary.overall);
+    }
+    var fallback = timeframes['1m'] || timeframes['1w'] || timeframes['1d'];
+    var fallbackLabel = fallback && fallback.trendMeter && fallback.trendMeter.label;
+    return fallbackLabel ? String(fallbackLabel) : 'n/a';
+  }
+
+  // Returns cached fundamentals quality label for an asset row, if available.
+  function fundamentalsQualityStatusForAsset(asset) {
+    var snapshot = getFundamentalsSnapshot(asset);
+    if (!snapshot) {
+      var cacheKey = fundamentalsCacheKeyForAsset(asset);
+      snapshot = cacheKey ? getCachedAny(cacheKey) : null;
+    }
+    var panel = snapshot && snapshot.panel ? snapshot.panel : null;
+    if (!panel) return 'n/a';
+    var quality = String(panel.qualityLabel || panel.label || '').trim();
+    return quality || 'n/a';
+  }
+
   function computeAsset(asset) {
     var quote = getMarketFor(asset);
     var preferredLivePrice = preferredQuotePriceForEntry(quote);
@@ -1683,7 +1746,10 @@
   function getModeComputedItems(mode) {
     var items = getRawModeItems(mode).map(function (asset) {
       var calc = computeAsset(asset);
-      return Object.assign({}, asset, calc);
+      return Object.assign({}, asset, calc, {
+        indicatorConclusion: indicatorOverallStatusForAsset(asset),
+        qualityOverall: fundamentalsQualityStatusForAsset(asset)
+      });
     });
     var s = state.app.sortBy;
     items.sort(function (a, b) {
@@ -2243,9 +2309,12 @@
   }
 
   function renderAll() {
+    var scrambleEnabled = !!state.app.scrambleHoldings;
+    var scrambleStockDisplays = state.app.mode === 'stocks' && scrambleEnabled;
     ui.setTheme(state.app.theme);
     ui.setLayoutMode(state.app.layoutMode);
     ui.setHoldingsPrivacy(!!state.app.hideHoldings);
+    ui.setHoldingsScramble(!!state.app.scrambleHoldings);
     ui.setStocksAutoRefreshToggle(!!state.app.stocksAutoRefreshEnabled, state.app.mode);
     ui.setCryptoAutoRefreshToggle(!!state.app.cryptoAutoRefreshEnabled, state.app.mode);
     ui.setCryptoParticlesToggle(!!state.app.cryptoParticlesEnabled, state.app.mode);
@@ -2268,9 +2337,19 @@
       !!selectedStock,
       selectedStock ? (selectedStock.name || selectedStock.symbol || 'Selected') : 'Selected'
     );
-    ui.renderPortfolio({ mode: state.app.mode, items: items, selectedKey: state.app.selectedKey, hideHoldings: !!state.app.hideHoldings });
-    ui.renderTotals(getModeTotals(items), !!state.app.hideHoldings);
-    renderAllocation(items);
+    ui.renderPortfolio({
+      mode: state.app.mode,
+      items: items,
+      selectedKey: state.app.selectedKey,
+      hideHoldings: !!state.app.hideHoldings,
+      scrambleHoldings: scrambleStockDisplays,
+      scrambleSeed: HOLDINGS_SCRAMBLE_SEED
+    });
+    ui.renderTotals(getModeTotals(items), !!state.app.hideHoldings, {
+      scrambleHoldings: scrambleEnabled,
+      scrambleSeed: HOLDINGS_SCRAMBLE_SEED
+    });
+    renderAllocation(items, { scrambleHoldings: scrambleStockDisplays, scrambleSeed: HOLDINGS_SCRAMBLE_SEED });
     renderDetails();
     ui.renderIndicatorsPanel(indicatorPanelStateForMode(state.app.mode) || {
       mode: state.app.mode,
@@ -2282,6 +2361,7 @@
     syncMobilePanelOrder();
     renderBtcDominancePanel();
     syncCryptoParticles();
+    if (PANEL_VIEWER.type) renderPanelViewerContent();
     persist();
   }
 
@@ -2329,6 +2409,186 @@
     };
   }
 
+  // Normalizes favorites payload into stable stocks/crypto arrays with dedupe.
+  function normalizeIndicatorExplorerFavorites(raw) {
+    var source = raw && raw.favorites && typeof raw.favorites === 'object' ? raw.favorites : raw;
+    var out = { stocks: [], crypto: [] };
+    var seen = {};
+    var stocks = Array.isArray(source && source.stocks) ? source.stocks : [];
+    var crypto = Array.isArray(source && source.crypto) ? source.crypto : [];
+
+    stocks.forEach(function (item) {
+      var symbol = String(item && (item.yahooSymbol || item.symbol) || '').trim().toUpperCase();
+      if (!symbol) return;
+      var key = 'stock:' + symbol;
+      if (seen[key]) return;
+      seen[key] = true;
+      out.stocks.push({
+        assetType: 'stock',
+        symbol: symbol,
+        yahooSymbol: symbol,
+        stooqSymbol: item && (item.stooqSymbol || item.stooq) ? String(item.stooqSymbol || item.stooq).trim() : null,
+        market: String(item && item.market || 'US').trim() || 'US',
+        name: String(item && item.name || symbol).trim() || symbol
+      });
+    });
+
+    crypto.forEach(function (item) {
+      var symbol = String(item && item.symbol || '').trim().toUpperCase();
+      var coinId = String(item && (item.coinId || item.id) || '').trim().toLowerCase();
+      if (!symbol && !coinId) return;
+      var normalizedSymbol = symbol || coinId.toUpperCase();
+      var key = 'crypto:' + normalizedSymbol;
+      if (seen[key]) return;
+      seen[key] = true;
+      out.crypto.push({
+        assetType: 'crypto',
+        symbol: normalizedSymbol,
+        coinId: coinId || null,
+        name: String(item && item.name || normalizedSymbol).trim() || normalizedSymbol
+      });
+    });
+
+    return out;
+  }
+
+  // Returns true when a favorites payload contains at least one saved item.
+  function hasIndicatorExplorerFavorites(payload) {
+    var normalized = normalizeIndicatorExplorerFavorites(payload);
+    return !!((normalized.stocks && normalized.stocks.length) || (normalized.crypto && normalized.crypto.length));
+  }
+
+  // Merges two favorites payloads and deduplicates via normalizer.
+  function mergeIndicatorExplorerFavorites(a, b) {
+    var left = normalizeIndicatorExplorerFavorites(a);
+    var right = normalizeIndicatorExplorerFavorites(b);
+    return normalizeIndicatorExplorerFavorites({
+      stocks: (left.stocks || []).concat(right.stocks || []),
+      crypto: (left.crypto || []).concat(right.crypto || [])
+    });
+  }
+
+  // Persists favorites in local cache as offline fallback for full-page refreshes.
+  function saveIndicatorExplorerFavoritesToLocalCache(payload) {
+    var normalized = normalizeIndicatorExplorerFavorites(payload);
+    storage.setCached(state.caches, EXPLORER_FAVORITES_LOCAL_CACHE_KEY, normalized);
+    storage.saveCache(state.caches);
+  }
+
+  // Reads favorites fallback from local cache.
+  function loadIndicatorExplorerFavoritesFromLocalCache() {
+    return normalizeIndicatorExplorerFavorites(
+      storage.getCached(state.caches, EXPLORER_FAVORITES_LOCAL_CACHE_KEY, 0) ||
+      getCachedAny(EXPLORER_FAVORITES_LOCAL_CACHE_KEY)
+    );
+  }
+
+  // Returns the stable favorite key for a target.
+  function indicatorExplorerFavoriteKeyFromTarget(target) {
+    if (!target) return '';
+    if (target.assetType === 'crypto') {
+      var cryptoSymbol = String(target.baseSymbol || target.symbol || '').replace('/USD', '').trim().toUpperCase();
+      return cryptoSymbol ? ('crypto:' + cryptoSymbol) : '';
+    }
+    var stockSymbol = String(target.yahooSymbol || target.symbol || '').trim().toUpperCase();
+    return stockSymbol ? ('stock:' + stockSymbol) : '';
+  }
+
+  // Converts an explorer target into a favorite record.
+  function indicatorExplorerFavoriteFromTarget(target) {
+    if (!target) return null;
+    if (target.assetType === 'crypto') {
+      var cryptoSymbol = String(target.baseSymbol || target.symbol || '').replace('/USD', '').trim().toUpperCase();
+      if (!cryptoSymbol) return null;
+      return {
+        assetType: 'crypto',
+        symbol: cryptoSymbol,
+        coinId: target.coinId || null,
+        name: String(target.name || cryptoSymbol).trim() || cryptoSymbol
+      };
+    }
+    var stockSymbol = String(target.yahooSymbol || target.symbol || '').trim().toUpperCase();
+    if (!stockSymbol) return null;
+    return {
+      assetType: 'stock',
+      symbol: stockSymbol,
+      yahooSymbol: stockSymbol,
+      stooqSymbol: target.stooqSymbol || null,
+      market: target.market || 'US',
+      name: String(target.name || stockSymbol).trim() || stockSymbol
+    };
+  }
+
+  // Returns the favorite list for the active explorer mode.
+  function indicatorExplorerFavoritesForMode(modeKey) {
+    if (!INDICATOR_EXPLORER.favorites) INDICATOR_EXPLORER.favorites = { stocks: [], crypto: [] };
+    return modeKey === 'crypto'
+      ? (Array.isArray(INDICATOR_EXPLORER.favorites.crypto) ? INDICATOR_EXPLORER.favorites.crypto : [])
+      : (Array.isArray(INDICATOR_EXPLORER.favorites.stocks) ? INDICATOR_EXPLORER.favorites.stocks : []);
+  }
+
+  // Returns true when the given target is in favorites.
+  function isIndicatorExplorerFavorite(target) {
+    var key = indicatorExplorerFavoriteKeyFromTarget(target);
+    if (!key) return false;
+    var list = indicatorExplorerFavoritesForMode(target && target.mode === 'crypto' ? 'crypto' : 'stocks');
+    return list.some(function (entry) {
+      var entryKey = entry.assetType === 'crypto'
+        ? ('crypto:' + String(entry.symbol || '').trim().toUpperCase())
+        : ('stock:' + String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase());
+      return entryKey === key;
+    });
+  }
+
+  // Persists explorer favorites to the local proxy DB.
+  function saveIndicatorExplorerFavoritesToRemote() {
+    if (!storage || typeof storage.saveRemoteExplorerFavorites !== 'function') return Promise.resolve({ ok: false });
+    var payload = normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+    INDICATOR_EXPLORER.favorites = payload;
+    saveIndicatorExplorerFavoritesToLocalCache(payload);
+    return storage.saveRemoteExplorerFavorites(payload);
+  }
+
+  // Loads explorer favorites from the local proxy DB.
+  function loadIndicatorExplorerFavoritesFromRemote() {
+    if (!storage || typeof storage.loadRemoteExplorerFavorites !== 'function') return Promise.resolve(null);
+    var localFallback = loadIndicatorExplorerFavoritesFromLocalCache();
+    if (hasIndicatorExplorerFavorites(localFallback)) {
+      INDICATOR_EXPLORER.favorites = localFallback;
+      INDICATOR_EXPLORER.favoritesLoaded = true;
+    }
+    return storage.loadRemoteExplorerFavorites().then(function (record) {
+      if (!record || !record.favorites || typeof record.favorites !== 'object') {
+        INDICATOR_EXPLORER.favorites = hasIndicatorExplorerFavorites(localFallback)
+          ? localFallback
+          : normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+        INDICATOR_EXPLORER.favoritesLoaded = hasIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+        return INDICATOR_EXPLORER.favorites;
+      }
+      var loaded = normalizeIndicatorExplorerFavorites(record && record.favorites);
+      var merged = hasIndicatorExplorerFavorites(localFallback)
+        ? mergeIndicatorExplorerFavorites(loaded, localFallback)
+        : loaded;
+      INDICATOR_EXPLORER.favorites = merged;
+      INDICATOR_EXPLORER.favoritesLoaded = true;
+      saveIndicatorExplorerFavoritesToLocalCache(merged);
+      return merged;
+    }).catch(function () {
+      INDICATOR_EXPLORER.favorites = hasIndicatorExplorerFavorites(localFallback)
+        ? localFallback
+        : normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+      INDICATOR_EXPLORER.favoritesLoaded = hasIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+      return INDICATOR_EXPLORER.favorites;
+    });
+  }
+
+  // Sets the explorer list view mode to all or favorites.
+  function setIndicatorExplorerView(viewKey) {
+    INDICATOR_EXPLORER.view = viewKey === 'favorites' ? 'favorites' : 'all';
+    hideIndicatorExplorerSearchResults();
+    renderIndicatorExplorer();
+  }
+
   function saveIndicatorExplorerSession(modeKey) {
     var normalizedMode = modeKey === 'crypto' ? 'crypto' : 'stocks';
     INDICATOR_EXPLORER.sessions[normalizedMode] = {
@@ -2365,6 +2625,11 @@
   function renderIndicatorExplorerSearchResults() {
     var listEl = ui.el.indicatorExplorerSearchList;
     if (!listEl) return;
+    if (INDICATOR_EXPLORER.view === 'favorites') {
+      listEl.classList.add('hidden');
+      listEl.innerHTML = '';
+      return;
+    }
     if (!INDICATOR_EXPLORER.results.length) {
       listEl.classList.add('hidden');
       listEl.innerHTML = '';
@@ -2375,16 +2640,52 @@
       var sub = INDICATOR_EXPLORER.mode === 'crypto'
         ? String(item.symbol || '').toUpperCase()
         : String(item.symbol || item.yahooSymbol || '').toUpperCase();
+      var target = indicatorTargetFromExplorerItem(item, INDICATOR_EXPLORER.mode);
+      var favorite = target ? isIndicatorExplorerFavorite(target) : false;
       var rawName = String(item.name || item.id || '').trim();
       var normalizedName = rawName.toUpperCase();
       var secondary = (rawName && normalizedName !== sub)
         ? rawName
         : (INDICATOR_EXPLORER.mode === 'stocks' ? String(item.market || item.stooq || '').trim() : '');
-      return '<button class="autocomplete__item" type="button" data-indicator-explorer-idx="' + idx + '">' +
-        '<strong>' + escapeHtml(sub) + '</strong>' +
-        (secondary ? ('<span>' + escapeHtml(secondary) + '</span>') : '') +
-      '</button>';
+      var secondaryDisplay = secondary ? (' • ' + secondary) : '';
+      return '<div class="autocomplete__item autocomplete__item--with-action">' +
+        '<button class="autocomplete__choice" type="button" data-indicator-explorer-idx="' + idx + '">' +
+          '<strong>' + escapeHtml(sub) + '</strong>' +
+          (secondaryDisplay ? ('<span class="autocomplete__secondary">' + escapeHtml(secondaryDisplay) + '</span>') : '') +
+        '</button>' +
+        '<button class="autocomplete__fav' + (favorite ? ' is-active' : '') + '" type="button" data-indicator-explorer-fav-idx="' + idx + '"' +
+          ' aria-label="' + (favorite ? 'Remove from favorites' : 'Add to favorites') + '"' +
+          ' title="' + (favorite ? 'Remove from favorites' : 'Add to favorites') + '"' +
+          ' aria-pressed="' + (favorite ? 'true' : 'false') + '">' + (favorite ? '★' : '☆') + '</button>' +
+      '</div>';
     }).join('');
+  }
+
+  // Adds/removes one explorer search result in favorites without selecting it.
+  function toggleIndicatorExplorerFavoriteFromItem(item) {
+    var target = indicatorTargetFromExplorerItem(item, INDICATOR_EXPLORER.mode);
+    if (!target) return;
+    var modeKey = target.mode === 'crypto' ? 'crypto' : 'stocks';
+    var list = indicatorExplorerFavoritesForMode(modeKey);
+    var key = indicatorExplorerFavoriteKeyFromTarget(target);
+    if (!key) return;
+    var existingIndex = list.findIndex(function (entry) {
+      var entryKey = entry.assetType === 'crypto'
+        ? ('crypto:' + String(entry.symbol || '').trim().toUpperCase())
+        : ('stock:' + String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase());
+      return entryKey === key;
+    });
+    if (existingIndex >= 0) list.splice(existingIndex, 1);
+    else {
+      var favoriteEntry = indicatorExplorerFavoriteFromTarget(target);
+      if (favoriteEntry) list.push(favoriteEntry);
+    }
+    INDICATOR_EXPLORER.favorites = normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+    renderIndicatorExplorerSearchResults();
+    renderIndicatorExplorerFavoriteButton();
+    if (INDICATOR_EXPLORER.view === 'favorites') renderIndicatorExplorerFavoritesList();
+    saveIndicatorExplorerSession(modeKey);
+    saveIndicatorExplorerFavoritesToRemote();
   }
 
   // Renders the explorer fundamentals block using the existing fundamentals card language.
@@ -2565,6 +2866,7 @@
   function renderIndicatorExplorer() {
     if (!ui || !ui.el || !ui.el.indicatorExplorerModal) return;
     var isCrypto = INDICATOR_EXPLORER.mode === 'crypto';
+    var showingFavorites = INDICATOR_EXPLORER.view === 'favorites';
     if (ui.el.indicatorExplorerStocksTab) {
       ui.el.indicatorExplorerStocksTab.classList.toggle('is-active', !isCrypto);
       ui.el.indicatorExplorerStocksTab.setAttribute('aria-selected', !isCrypto ? 'true' : 'false');
@@ -2575,6 +2877,24 @@
     }
     if (ui.el.indicatorExplorerSearchInput) {
       ui.el.indicatorExplorerSearchInput.placeholder = isCrypto ? 'Search SOL or Solana' : 'Search TSLA or Tesla';
+    }
+    if (ui.el.indicatorExplorerViewAllBtn && ui.el.indicatorExplorerViewFavoritesBtn) {
+      ui.el.indicatorExplorerViewAllBtn.classList.toggle('btn--primary', !showingFavorites);
+      ui.el.indicatorExplorerViewAllBtn.classList.toggle('btn--ghost', showingFavorites);
+      ui.el.indicatorExplorerViewAllBtn.setAttribute('aria-pressed', !showingFavorites ? 'true' : 'false');
+      ui.el.indicatorExplorerViewFavoritesBtn.classList.toggle('btn--primary', showingFavorites);
+      ui.el.indicatorExplorerViewFavoritesBtn.classList.toggle('btn--ghost', !showingFavorites);
+      ui.el.indicatorExplorerViewFavoritesBtn.setAttribute('aria-pressed', showingFavorites ? 'true' : 'false');
+    }
+    if (ui.el.indicatorExplorerSearchWrap) {
+      ui.el.indicatorExplorerSearchWrap.classList.toggle('hidden', showingFavorites);
+    }
+    if (ui.el.indicatorExplorerFavoritesPage) {
+      ui.el.indicatorExplorerFavoritesPage.classList.toggle('hidden', !showingFavorites);
+      if (showingFavorites) renderIndicatorExplorerFavoritesList();
+    }
+    if (ui.el.indicatorExplorerLayout) {
+      ui.el.indicatorExplorerLayout.classList.toggle('hidden', showingFavorites);
     }
     var hasSelection = !!INDICATOR_EXPLORER.selected;
     if (ui.el.indicatorExplorerChartTitle && ui.el.indicatorExplorerChartTitle.closest('.panel-block')) {
@@ -2632,6 +2952,7 @@
     }
     renderIndicatorExplorerFundamentals();
     renderIndicatorExplorerNews();
+    renderIndicatorExplorerFavoriteButton();
     renderIndicatorExplorerSearchResults();
   }
 
@@ -2647,10 +2968,16 @@
     if (!ui.el.indicatorExplorerModal) return;
     ui.el.indicatorExplorerModal.classList.remove('hidden');
     ui.el.indicatorExplorerModal.setAttribute('aria-hidden', 'false');
-    loadIndicatorExplorerSession(INDICATOR_EXPLORER.mode);
+    var startMode = state && state.app && state.app.mode === 'crypto' ? 'crypto' : 'stocks';
+    loadIndicatorExplorerSession(startMode);
     renderIndicatorExplorer();
+    if (!INDICATOR_EXPLORER.favoritesLoaded) {
+      loadIndicatorExplorerFavoritesFromRemote().then(function () {
+        renderIndicatorExplorer();
+      });
+    }
     if (INDICATOR_EXPLORER.selected) refreshIndicatorExplorerSupplementary(INDICATOR_EXPLORER.selected, false);
-    if (ui.el.indicatorExplorerSearchInput) ui.el.indicatorExplorerSearchInput.focus();
+    if (ui.el.indicatorExplorerSearchInput && INDICATOR_EXPLORER.view !== 'favorites') ui.el.indicatorExplorerSearchInput.focus();
   }
 
   function closeIndicatorExplorerModal() {
@@ -2661,9 +2988,120 @@
     hideIndicatorExplorerSearchResults();
   }
 
+  // Returns true when desktop-only panel expansion is allowed.
+  function canOpenPanelViewer() {
+    return !!(window.matchMedia && window.matchMedia('(min-width: 1121px)').matches);
+  }
+
+  // Resolves panel viewer source element and labels for the requested panel type.
+  function getPanelViewerConfig(type) {
+    var safeType = String(type || '').toLowerCase();
+    if (safeType === 'holdings') {
+      return {
+        type: 'holdings',
+        title: 'Holdings',
+        subtitle: (ui.el.holdingsCount && ui.el.holdingsCount.textContent) || '0 assets',
+        source: ui.el.holdingsPanel
+      };
+    }
+    if (safeType === 'indicators') {
+      return {
+        type: 'indicators',
+        title: 'Indicators',
+        subtitle: (ui.el.indicatorsAssetLabel && ui.el.indicatorsAssetLabel.textContent) || 'No asset selected',
+        source: ui.el.indicatorsPanel
+      };
+    }
+    if (safeType === 'fundamentals') {
+      return {
+        type: 'fundamentals',
+        title: 'Fundamentals',
+        subtitle: (ui.el.fundamentalsAssetLabel && ui.el.fundamentalsAssetLabel.textContent) || 'No asset selected',
+        source: ui.el.fundamentalsPanel
+      };
+    }
+    if (safeType === 'news') {
+      return {
+        type: 'news',
+        title: 'News',
+        subtitle: 'Market headlines and selected asset feed',
+        source: ui.el.newsPanel
+      };
+    }
+    return null;
+  }
+
+  // Cleans a cloned panel before showing it in the expanded panel viewer modal.
+  function sanitizePanelViewerClone(node, type) {
+    if (!node) return node;
+    var expandBtns = node.querySelectorAll('.panel-expand-btn:not(.holdings-refresh-btn)');
+    expandBtns.forEach(function (btn) { btn.remove(); });
+    if (String(type || '').toLowerCase() === 'news') {
+      var socialsBlock = node.querySelector('.panel-block--socials');
+      if (socialsBlock && socialsBlock.parentNode) socialsBlock.parentNode.removeChild(socialsBlock);
+    }
+    return node;
+  }
+
+  // Renders the currently selected panel clone into the panel viewer modal body.
+  function renderPanelViewerContent() {
+    if (!ui || !ui.el || !ui.el.panelViewerHost) return;
+    var cfg = getPanelViewerConfig(PANEL_VIEWER.type);
+    if (!cfg || !cfg.source) {
+      ui.el.panelViewerHost.innerHTML = '<div class="muted">Panel unavailable.</div>';
+      return;
+    }
+    if (ui.el.panelViewerTitle) ui.el.panelViewerTitle.textContent = cfg.title;
+    if (ui.el.panelViewerSubtitle) ui.el.panelViewerSubtitle.textContent = cfg.subtitle || 'Expanded panel preview.';
+    var clone = sanitizePanelViewerClone(cfg.source.cloneNode(true), cfg.type);
+    var preview = document.createElement('div');
+    preview.className = 'panel-viewer-preview panel-viewer-preview--' + cfg.type;
+    preview.appendChild(clone);
+    if (cfg.type === 'holdings') {
+      var clonedRefreshBtn = clone.querySelector('#holdingsRefreshBtn');
+      if (clonedRefreshBtn) {
+        clonedRefreshBtn.addEventListener('click', function () {
+          runManualRefreshAction();
+        });
+      }
+      var clonedSort = clone.querySelector('#holdingsSortSelect');
+      if (clonedSort) {
+        clonedSort.addEventListener('change', function () {
+          state.app.sortBy = clonedSort.value || 'az';
+          renderAll();
+        });
+      }
+    }
+    ui.el.panelViewerHost.innerHTML = '';
+    ui.el.panelViewerHost.appendChild(preview);
+  }
+
+  // Opens the panel viewer modal with a cloned panel (desktop only).
+  function openPanelViewer(type) {
+    if (!canOpenPanelViewer()) return;
+    if (!ui || !ui.el || !ui.el.panelViewerModal) return;
+    var cfg = getPanelViewerConfig(type);
+    if (!cfg || !cfg.source) return;
+    PANEL_VIEWER.type = cfg.type;
+    renderPanelViewerContent();
+    ui.el.panelViewerModal.classList.remove('hidden');
+    ui.el.panelViewerModal.setAttribute('aria-hidden', 'false');
+    if (ui.el.panelViewerCloseBtn) ui.el.panelViewerCloseBtn.focus();
+  }
+
+  // Closes and clears the panel viewer modal state.
+  function closePanelViewer() {
+    if (!ui || !ui.el || !ui.el.panelViewerModal) return;
+    PANEL_VIEWER.type = null;
+    ui.el.panelViewerModal.classList.add('hidden');
+    ui.el.panelViewerModal.setAttribute('aria-hidden', 'true');
+    if (ui.el.panelViewerHost) ui.el.panelViewerHost.innerHTML = '';
+  }
+
   function runIndicatorExplorerSearch() {
     var inputEl = ui.el.indicatorExplorerSearchInput;
     if (!inputEl) return;
+    if (INDICATOR_EXPLORER.view === 'favorites') return;
     var q = String(inputEl.value || '').trim();
     INDICATOR_EXPLORER.query = q;
     if (q.length < 1) {
@@ -2928,8 +3366,275 @@
     ]).then(function () { return null; });
   }
 
-  function selectIndicatorExplorerItem(item) {
-    var target = indicatorTargetFromExplorerItem(item, INDICATOR_EXPLORER.mode);
+  // Converts a persisted favorite record back into an explorer target.
+  function indicatorTargetFromExplorerFavorite(entry, modeKey) {
+    if (!entry) return null;
+    if (modeKey === 'crypto') {
+      var cryptoSymbol = String(entry.symbol || '').trim().toUpperCase();
+      if (!cryptoSymbol) return null;
+      return {
+        mode: 'crypto',
+        assetType: 'crypto',
+        symbol: cryptoSymbol + '/USD',
+        label: entry.name ? (entry.name + ' (' + cryptoSymbol + '/USD)') : (cryptoSymbol + '/USD'),
+        name: entry.name || cryptoSymbol,
+        cacheKey: indicatorTargetKey({ assetType: 'crypto', symbol: cryptoSymbol + '/USD' }),
+        owned: false,
+        sourceId: entry.coinId || cryptoSymbol,
+        coinId: entry.coinId || null,
+        baseSymbol: cryptoSymbol
+      };
+    }
+    var stockSymbol = String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase();
+    if (!stockSymbol) return null;
+    return {
+      mode: 'stocks',
+      assetType: 'stock',
+      symbol: stockSymbol,
+      label: entry.name ? (entry.name + ' (' + stockSymbol + ')') : stockSymbol,
+      name: entry.name || stockSymbol,
+      cacheKey: indicatorTargetKey({ assetType: 'stock', symbol: stockSymbol }),
+      owned: false,
+      sourceId: entry.yahooSymbol || stockSymbol,
+      yahooSymbol: stockSymbol,
+      stooqSymbol: entry.stooqSymbol || null,
+      market: entry.market || 'US'
+    };
+  }
+
+  // Maps generic trend labels into holdings-style signal classes for favorites rows.
+  function indicatorStatusPillClass(label) {
+    var normalized = String(label || '').trim().toLowerCase();
+    if (normalized.indexOf('bull') >= 0 || normalized === 'strong') return 'indicator-explorer-favorites__status asset-row__signal asset-row__signal--bullish';
+    if (normalized.indexOf('bear') >= 0 || normalized.indexOf('risk') >= 0 || normalized.indexOf('weak') >= 0) return 'indicator-explorer-favorites__status asset-row__signal asset-row__signal--bearish';
+    return 'indicator-explorer-favorites__status asset-row__signal asset-row__signal--neutral';
+  }
+
+  // Maps fundamentals quality labels into holdings-style signal classes for favorites rows.
+  function fundamentalsStatusChipClass(label) {
+    var normalized = String(label || '').trim().toLowerCase();
+    if (normalized.indexOf('strong') >= 0 || normalized === 'healthy') return 'indicator-explorer-favorites__status asset-row__signal asset-row__signal--bullish';
+    if (normalized.indexOf('weak') >= 0 || normalized.indexOf('risk') >= 0 || normalized === 'expensive') return 'indicator-explorer-favorites__status asset-row__signal asset-row__signal--bearish';
+    return 'indicator-explorer-favorites__status asset-row__signal asset-row__signal--neutral';
+  }
+
+  // Reads cached trend-meter overall label for an explorer target.
+  function indicatorOverallStatusForTarget(target) {
+    if (!target) return 'n/a';
+    var targetKey = target.cacheKey || indicatorTargetKey(target);
+    if (!targetKey) return 'n/a';
+    var timeframes = {};
+    ['1d', '1w', '1m'].forEach(function (timeframeKey) {
+      var snapshot = getCachedAny(indicatorComputedCacheKey(targetKey, timeframeKey));
+      if (snapshot && snapshot.trendMeter) timeframes[timeframeKey] = snapshot;
+    });
+    if (!Object.keys(timeframes).length) return 'n/a';
+    if (window.PT && window.PT.IndicatorEngine && typeof window.PT.IndicatorEngine.summarizeByTimeframe === 'function') {
+      var summary = window.PT.IndicatorEngine.summarizeByTimeframe(timeframes) || {};
+      if (summary && summary.overall) return String(summary.overall);
+    }
+    var fallback = timeframes['1m'] || timeframes['1w'] || timeframes['1d'];
+    var fallbackLabel = fallback && fallback.trendMeter && fallback.trendMeter.label;
+    return fallbackLabel ? String(fallbackLabel) : 'n/a';
+  }
+
+  // Reads cached fundamentals quality label for an explorer target.
+  function fundamentalsQualityStatusForTarget(target) {
+    var asset = explorerAssetFromTarget(target);
+    if (!asset) return 'n/a';
+    var snapshot = getFundamentalsSnapshot(asset);
+    if (!snapshot) {
+      var cacheKey = fundamentalsCacheKeyForAsset(asset);
+      snapshot = cacheKey ? getCachedAny(cacheKey) : null;
+    }
+    var panel = snapshot && snapshot.panel ? snapshot.panel : null;
+    if (!panel) return 'n/a';
+    var quality = String(panel.qualityLabel || panel.label || '').trim();
+    return quality || 'n/a';
+  }
+
+  // Finds the latest cached quote for an explorer favorite.
+  function getCachedQuoteForExplorerFavorite(entry, target) {
+    var modeKey = target && target.mode === 'crypto' ? 'crypto' : 'stocks';
+    if (modeKey === 'crypto') {
+      var coinId = String(entry && entry.coinId || target && target.coinId || '').trim().toLowerCase();
+      var symbol = String(entry && entry.symbol || target && target.baseSymbol || '').trim().toUpperCase();
+      var portfolioHit = state.portfolio.crypto.find(function (asset) {
+        return (coinId && String(asset.coinId || '').toLowerCase() === coinId) ||
+          (symbol && String(asset.symbol || '').toUpperCase() === symbol);
+      });
+      if (portfolioHit && state.market.crypto[portfolioHit.id]) return state.market.crypto[portfolioHit.id];
+      if (coinId) return storage.getCached(state.caches, 'quote:crypto:' + coinId, 0) || getCachedAny('quote:crypto:' + coinId);
+      if (symbol) return storage.getCached(state.caches, 'quote:crypto:' + symbol.toLowerCase(), 0) || getCachedAny('quote:crypto:' + symbol.toLowerCase());
+      return null;
+    }
+    var stockSymbol = String(entry && (entry.yahooSymbol || entry.symbol) || target && (target.yahooSymbol || target.symbol) || '').trim().toUpperCase();
+    var stooqSymbol = String(entry && entry.stooqSymbol || target && target.stooqSymbol || '').trim().toLowerCase();
+    var stockHit = state.portfolio.stocks.find(function (asset) {
+      return (stockSymbol && String(asset.yahooSymbol || asset.symbol || '').toUpperCase() === stockSymbol) ||
+        (stooqSymbol && String(asset.stooqSymbol || '').toLowerCase() === stooqSymbol);
+    });
+    if (stockHit && state.market.stocks[stockHit.id]) return state.market.stocks[stockHit.id];
+    var quoteKeys = [];
+    if (stooqSymbol) quoteKeys.push('quote:stock:' + stooqSymbol);
+    if (stockSymbol) {
+      quoteKeys.push('quote:stock:' + stockSymbol.toLowerCase());
+      quoteKeys.push('quote:stock:' + stockSymbol);
+    }
+    for (var i = 0; i < quoteKeys.length; i++) {
+      var cached = storage.getCached(state.caches, quoteKeys[i], 0) || getCachedAny(quoteKeys[i]);
+      if (cached) return cached;
+    }
+    return null;
+  }
+
+  // Resolves display price and day change percent for a favorite row from quote/indicator caches.
+  function getExplorerFavoriteQuoteSummary(entry, target) {
+    var quote = getCachedQuoteForExplorerFavorite(entry, target);
+    var price = preferredQuotePriceForEntry(quote);
+    var dayPct = null;
+
+    if (quote && isFinite(Number(quote.changePercent))) {
+      dayPct = Number(quote.changePercent);
+    } else if (quote && isFinite(Number(quote.percent_change))) {
+      dayPct = Number(quote.percent_change);
+    } else if (target && target.assetType === 'crypto' && quote && isFinite(Number(quote.change24h))) {
+      dayPct = Number(quote.change24h);
+    } else if (quote && isFinite(Number(quote.change)) && price !== null) {
+      var derivedPrev = price - Number(quote.change);
+      if (derivedPrev !== 0) dayPct = (Number(quote.change) / derivedPrev) * 100;
+    } else if (quote && isFinite(Number(quote.regularMarketPreviousClose)) && price !== null && Number(quote.regularMarketPreviousClose) !== 0) {
+      dayPct = ((price - Number(quote.regularMarketPreviousClose)) / Number(quote.regularMarketPreviousClose)) * 100;
+    } else if (quote && isFinite(Number(quote.previous_close)) && price !== null && Number(quote.previous_close) !== 0) {
+      dayPct = ((price - Number(quote.previous_close)) / Number(quote.previous_close)) * 100;
+    }
+
+    var targetKey = target && (target.cacheKey || indicatorTargetKey(target));
+    var tfSnapshot = targetKey ? getCachedAny(indicatorComputedCacheKey(targetKey, '1d')) : null;
+    var snapshotClose = isFinite(Number(tfSnapshot && tfSnapshot.close)) ? Number(tfSnapshot.close) : null;
+    var snapshotPrev = isFinite(Number(tfSnapshot && tfSnapshot.values && tfSnapshot.values.prevClose))
+      ? Number(tfSnapshot.values.prevClose)
+      : null;
+    if (price === null && snapshotClose !== null) price = snapshotClose;
+    if (dayPct === null && snapshotClose !== null && snapshotPrev !== null && snapshotPrev !== 0) {
+      dayPct = ((snapshotClose - snapshotPrev) / snapshotPrev) * 100;
+    }
+
+    return {
+      price: isFinite(Number(price)) ? Number(price) : null,
+      dayPct: isFinite(Number(dayPct)) ? Number(dayPct) : null
+    };
+  }
+
+  // Renders the favorites list section for the active explorer mode.
+  function renderIndicatorExplorerFavoritesList() {
+    if (!ui || !ui.el || !ui.el.indicatorExplorerFavoritesList) return;
+    var list = indicatorExplorerFavoritesForMode(INDICATOR_EXPLORER.mode);
+    if (ui.el.indicatorExplorerFavoritesCount) {
+      ui.el.indicatorExplorerFavoritesCount.textContent = list.length + ' favorite' + (list.length === 1 ? '' : 's');
+    }
+    if (!list.length) {
+      ui.el.indicatorExplorerFavoritesList.innerHTML =
+        '<div class="indicator-explorer-favorites__empty">No favorites yet. Search and mark assets with ☆ Favorite.</div>';
+      return;
+    }
+    ui.el.indicatorExplorerFavoritesList.innerHTML = list.map(function (entry) {
+      var target = indicatorTargetFromExplorerFavorite(entry, INDICATOR_EXPLORER.mode);
+      var key = entry.assetType === 'crypto'
+        ? ('crypto:' + String(entry.symbol || '').trim().toUpperCase())
+        : ('stock:' + String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase());
+      var ticker = entry.assetType === 'crypto'
+        ? String(entry.symbol || '').trim().toUpperCase()
+        : String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase();
+      var title = String(entry.name || ticker || '').trim();
+      var subtitle = entry.assetType === 'crypto'
+        ? (ticker + (entry.coinId ? (' • ' + entry.coinId) : ''))
+        : (ticker + (entry.market ? (' • ' + entry.market) : ''));
+      var taStatus = indicatorOverallStatusForTarget(target);
+      var faStatus = fundamentalsQualityStatusForTarget(target);
+      var quoteSummary = getExplorerFavoriteQuoteSummary(entry, target);
+      var priceText = quoteSummary.price != null ? ui.fmtCurrency(quoteSummary.price) : 'n/a';
+      var dayClass = quoteSummary.dayPct == null ? 'pl--flat' : ui.pctClass(quoteSummary.dayPct);
+      var dayText = quoteSummary.dayPct == null ? 'n/a' : ui.pctText(quoteSummary.dayPct);
+      return '' +
+        '<div class="indicator-explorer-favorites__row" data-explorer-favorite-open="' + escapeHtml(key) + '">' +
+          '<button class="indicator-explorer-favorites__open" type="button" data-explorer-favorite-open="' + escapeHtml(key) + '" title="' + escapeHtml(title) + '">' +
+            '<span class="indicator-explorer-favorites__ticker">' + escapeHtml(ticker || title || subtitle) + '</span>' +
+            '<small class="indicator-explorer-favorites__meta">' + escapeHtml(subtitle) + '</small>' +
+          '</button>' +
+          '<span class="' + indicatorStatusPillClass(taStatus) + '">' + escapeHtml('TA ' + taStatus) + '</span>' +
+          '<span class="' + fundamentalsStatusChipClass(faStatus) + '">' + escapeHtml('Q ' + faStatus) + '</span>' +
+          '<span class="indicator-explorer-favorites__price">' + escapeHtml(priceText) + '</span>' +
+          '<span class="indicator-explorer-favorites__change ' + escapeHtml(dayClass) + '">' + escapeHtml(dayText) + '</span>' +
+          '<button class="btn btn--ghost btn--tiny indicator-explorer-favorites__remove" type="button" data-explorer-favorite-remove="' + escapeHtml(key) + '" aria-label="Remove favorite">Remove</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  // Updates the selected-asset favorite button state.
+  function renderIndicatorExplorerFavoriteButton() {
+    if (!ui || !ui.el || !ui.el.indicatorExplorerFavoriteBtn) return;
+    var selected = INDICATOR_EXPLORER.selected;
+    if (!selected) {
+      ui.el.indicatorExplorerFavoriteBtn.disabled = true;
+      ui.el.indicatorExplorerFavoriteBtn.textContent = '☆ Favorite';
+      ui.el.indicatorExplorerFavoriteBtn.setAttribute('aria-pressed', 'false');
+      ui.el.indicatorExplorerFavoriteBtn.title = 'Select an asset first';
+      return;
+    }
+    var favorite = isIndicatorExplorerFavorite(selected);
+    ui.el.indicatorExplorerFavoriteBtn.disabled = false;
+    ui.el.indicatorExplorerFavoriteBtn.textContent = favorite ? '★ Favorited' : '☆ Favorite';
+    ui.el.indicatorExplorerFavoriteBtn.setAttribute('aria-pressed', favorite ? 'true' : 'false');
+    ui.el.indicatorExplorerFavoriteBtn.title = favorite ? 'Remove from favorites' : 'Add to favorites';
+  }
+
+  // Adds/removes current explorer selection in favorites and persists it to DB.
+  function toggleIndicatorExplorerFavorite() {
+    var selected = INDICATOR_EXPLORER.selected;
+    if (!selected) return;
+    var modeKey = selected.mode === 'crypto' ? 'crypto' : 'stocks';
+    var list = indicatorExplorerFavoritesForMode(modeKey);
+    var key = indicatorExplorerFavoriteKeyFromTarget(selected);
+    if (!key) return;
+    var existingIndex = list.findIndex(function (entry) {
+      var entryKey = entry.assetType === 'crypto'
+        ? ('crypto:' + String(entry.symbol || '').trim().toUpperCase())
+        : ('stock:' + String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase());
+      return entryKey === key;
+    });
+    if (existingIndex >= 0) list.splice(existingIndex, 1);
+    else {
+      var favoriteEntry = indicatorExplorerFavoriteFromTarget(selected);
+      if (favoriteEntry) list.push(favoriteEntry);
+    }
+    INDICATOR_EXPLORER.favorites = normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+    renderIndicatorExplorer();
+    saveIndicatorExplorerSession(modeKey);
+    saveIndicatorExplorerFavoritesToRemote();
+  }
+
+  // Removes one favorite by key and persists the updated list.
+  function removeIndicatorExplorerFavoriteByKey(modeKey, key) {
+    var list = indicatorExplorerFavoritesForMode(modeKey);
+    var before = list.length;
+    var filtered = list.filter(function (entry) {
+      var entryKey = entry.assetType === 'crypto'
+        ? ('crypto:' + String(entry.symbol || '').trim().toUpperCase())
+        : ('stock:' + String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase());
+      return entryKey !== key;
+    });
+    if (modeKey === 'crypto') INDICATOR_EXPLORER.favorites.crypto = filtered;
+    else INDICATOR_EXPLORER.favorites.stocks = filtered;
+    if (filtered.length === before) return;
+    INDICATOR_EXPLORER.favorites = normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+    renderIndicatorExplorer();
+    saveIndicatorExplorerSession(modeKey);
+    saveIndicatorExplorerFavoritesToRemote();
+  }
+
+  // Applies a fully-built explorer target selection and triggers all panel refreshes.
+  function selectIndicatorExplorerTarget(target) {
     if (!target) return;
     // Invalidate in-flight autocomplete responses so the list cannot re-open after selection.
     INDICATOR_EXPLORER.requestId += 1;
@@ -2970,12 +3675,17 @@
     refreshIndicatorExplorerSupplementary(target, false);
   }
 
-  function renderAllocation(items) {
+  function selectIndicatorExplorerItem(item) {
+    var target = indicatorTargetFromExplorerItem(item, INDICATOR_EXPLORER.mode);
+    selectIndicatorExplorerTarget(target);
+  }
+
+  function renderAllocation(items, options) {
     var sorted = items.slice().sort(function (a, b) { return b.marketValue - a.marketValue; });
     var labels = sorted.map(function (i) { return i.symbol; });
     var values = sorted.map(function (i) { return Number(i.marketValue.toFixed(2)); });
     chartMgr.renderAllocation(ui.el.allocationChart, ui.el.pieFallback, labels, values);
-    ui.renderAllocationLegend(sorted, AUTO_COLORS, !!state.app.hideHoldings);
+    ui.renderAllocationLegend(sorted, AUTO_COLORS, !!state.app.hideHoldings, options || {});
   }
 
   function setAllocationLegendHighlight(index) {
@@ -3147,6 +3857,13 @@
 
   function applyHoldingsPrivacyToggle() {
     state.app.hideHoldings = !state.app.hideHoldings;
+    renderAll();
+  }
+
+  // Toggles UI-only holdings scramble mode (stock tickers + percentage displays).
+  function applyHoldingsScrambleToggle() {
+    state.app.scrambleHoldings = !state.app.scrambleHoldings;
+    if (state.app.scrambleHoldings) HOLDINGS_SCRAMBLE_SEED = id();
     renderAll();
   }
 
@@ -4570,6 +5287,23 @@
     // legacy timer retained but disabled for data refresh; dedicated stock/crypto auto timers now control this.
   }
 
+  // Re-renders quote freshness icons from cached timestamps only (no fetch/save side effects).
+  function refreshQuoteFreshnessBadges() {
+    if (!ui || !ui.el || !ui.el.portfolioList) return;
+    var scrambleStockDisplays = state.app.mode === 'stocks' && !!state.app.scrambleHoldings;
+    var items = getModeComputedItems(state.app.mode);
+    ensureValidSelection(state.app.mode, items);
+    ui.renderPortfolio({
+      mode: state.app.mode,
+      items: items,
+      selectedKey: state.app.selectedKey,
+      hideHoldings: !!state.app.hideHoldings,
+      scrambleHoldings: scrambleStockDisplays,
+      scrambleSeed: HOLDINGS_SCRAMBLE_SEED
+    });
+    if (PANEL_VIEWER.type === 'holdings') renderPanelViewerContent();
+  }
+
   function refreshSelectedMarketClock() {
     var asset = getSelectedAsset(state.app.mode);
     if (!asset || asset.type !== 'stock') return;
@@ -4664,9 +5398,18 @@
     if (ui.el.demoModeToggle) ui.el.demoModeToggle.addEventListener('click', applyDemoModeToggle);
     if (ui.el.apiSourcesBtn) ui.el.apiSourcesBtn.addEventListener('click', openApiSourcesModal);
     if (ui.el.indicatorExplorerBtn) ui.el.indicatorExplorerBtn.addEventListener('click', openIndicatorExplorerModal);
+    if (ui.el.holdingsRefreshBtn) ui.el.holdingsRefreshBtn.addEventListener('click', runManualRefreshAction);
+    if (ui.el.openHoldingsPanelBtn) ui.el.openHoldingsPanelBtn.addEventListener('click', function () { openPanelViewer('holdings'); });
+    if (ui.el.openIndicatorsPanelBtn) ui.el.openIndicatorsPanelBtn.addEventListener('click', function () { openPanelViewer('indicators'); });
+    if (ui.el.openFundamentalsPanelBtn) ui.el.openFundamentalsPanelBtn.addEventListener('click', function () { openPanelViewer('fundamentals'); });
+    if (ui.el.openNewsPanelBtn) ui.el.openNewsPanelBtn.addEventListener('click', function () { openPanelViewer('news'); });
+    if (ui.el.panelViewerCloseBtn) ui.el.panelViewerCloseBtn.addEventListener('click', closePanelViewer);
     if (ui.el.indicatorExplorerCloseBtn) ui.el.indicatorExplorerCloseBtn.addEventListener('click', closeIndicatorExplorerModal);
     if (ui.el.indicatorExplorerStocksTab) ui.el.indicatorExplorerStocksTab.addEventListener('click', function () { setIndicatorExplorerMode('stocks'); });
     if (ui.el.indicatorExplorerCryptoTab) ui.el.indicatorExplorerCryptoTab.addEventListener('click', function () { setIndicatorExplorerMode('crypto'); });
+    if (ui.el.indicatorExplorerViewAllBtn) ui.el.indicatorExplorerViewAllBtn.addEventListener('click', function () { setIndicatorExplorerView('all'); });
+    if (ui.el.indicatorExplorerViewFavoritesBtn) ui.el.indicatorExplorerViewFavoritesBtn.addEventListener('click', function () { setIndicatorExplorerView('favorites'); });
+    if (ui.el.indicatorExplorerFavoriteBtn) ui.el.indicatorExplorerFavoriteBtn.addEventListener('click', toggleIndicatorExplorerFavorite);
     if (ui.el.indicatorExplorerSearchInput) ui.el.indicatorExplorerSearchInput.addEventListener('input', runIndicatorExplorerSearch);
     if (ui.el.indicatorExplorerNewsRefreshBtn) {
       ui.el.indicatorExplorerNewsRefreshBtn.addEventListener('click', function () {
@@ -4674,8 +5417,41 @@
         refreshIndicatorExplorerNews(INDICATOR_EXPLORER.selected, true);
       });
     }
+    if (ui.el.indicatorExplorerFavoritesList) {
+      ui.el.indicatorExplorerFavoritesList.addEventListener('click', function (event) {
+        var removeBtn = event.target.closest('[data-explorer-favorite-remove]');
+        if (removeBtn) {
+          var removeKey = String(removeBtn.getAttribute('data-explorer-favorite-remove') || '').trim();
+          removeIndicatorExplorerFavoriteByKey(INDICATOR_EXPLORER.mode, removeKey);
+          return;
+        }
+        var openBtn = event.target.closest('[data-explorer-favorite-open]');
+        if (openBtn) {
+          var openKey = String(openBtn.getAttribute('data-explorer-favorite-open') || '').trim();
+          var openList = indicatorExplorerFavoritesForMode(INDICATOR_EXPLORER.mode);
+          var match = openList.find(function (entry) {
+            var entryKey = entry.assetType === 'crypto'
+              ? ('crypto:' + String(entry.symbol || '').trim().toUpperCase())
+              : ('stock:' + String(entry.yahooSymbol || entry.symbol || '').trim().toUpperCase());
+            return entryKey === openKey;
+          });
+          if (match) {
+            setIndicatorExplorerView('all');
+            selectIndicatorExplorerTarget(indicatorTargetFromExplorerFavorite(match, INDICATOR_EXPLORER.mode));
+          }
+          return;
+        }
+      });
+    }
     if (ui.el.indicatorExplorerSearchList) {
       ui.el.indicatorExplorerSearchList.addEventListener('click', function (event) {
+        var favoriteBtn = event.target.closest('[data-indicator-explorer-fav-idx]');
+        if (favoriteBtn) {
+          var favoriteIdx = Number(favoriteBtn.getAttribute('data-indicator-explorer-fav-idx'));
+          if (!isFinite(favoriteIdx) || favoriteIdx < 0 || favoriteIdx >= INDICATOR_EXPLORER.results.length) return;
+          toggleIndicatorExplorerFavoriteFromItem(INDICATOR_EXPLORER.results[favoriteIdx]);
+          return;
+        }
         var btn = event.target.closest('[data-indicator-explorer-idx]');
         if (!btn) return;
         var idx = Number(btn.getAttribute('data-indicator-explorer-idx'));
@@ -4685,6 +5461,7 @@
     }
     if (ui.el.apiDebugToggle) ui.el.apiDebugToggle.addEventListener('click', applyApiDebugToggle);
     if (ui.el.holdingsPrivacyToggle) ui.el.holdingsPrivacyToggle.addEventListener('click', applyHoldingsPrivacyToggle);
+    if (ui.el.holdingsScrambleToggle) ui.el.holdingsScrambleToggle.addEventListener('click', applyHoldingsScrambleToggle);
     if (ui.el.cryptoParticlesToggle) ui.el.cryptoParticlesToggle.addEventListener('click', applyCryptoParticlesToggle);
     if (ui.el.uiTransparencyToggle) ui.el.uiTransparencyToggle.addEventListener('click', applyUiTransparencyToggle);
     ui.el.addAssetBtn.addEventListener('click', function () { openAddModal(null); });
@@ -4725,18 +5502,7 @@
         ui.el.importInput.value = '';
       });
     });
-    ui.el.refreshBtn.addEventListener('click', function () {
-      playRefreshButtonFeedback();
-      if (state.app.mode === 'stocks') {
-        refreshStocksQuotesOnly({ force: true, reason: 'manual' }).finally(function () {
-          refreshSelectedFundamentals(true);
-        });
-        return;
-      }
-      refreshVisibleData().finally(function () {
-        refreshSelectedFundamentals(true);
-      });
-    });
+    if (ui.el.refreshBtn) ui.el.refreshBtn.addEventListener('click', runManualRefreshAction);
     if (ui.el.stocksAutoRefreshToggle) {
       ui.el.stocksAutoRefreshToggle.addEventListener('click', function () {
         setStocksAutoRefreshEnabled(!state.app.stocksAutoRefreshEnabled, {
@@ -4761,6 +5527,11 @@
     if (ui.el.indicatorExplorerModal) {
       ui.el.indicatorExplorerModal.addEventListener('click', function (e) {
         if (e.target && e.target.getAttribute('data-close-indicator-explorer') === '1') closeIndicatorExplorerModal();
+      });
+    }
+    if (ui.el.panelViewerModal) {
+      ui.el.panelViewerModal.addEventListener('click', function (e) {
+        if (e.target && e.target.getAttribute('data-close-panel-viewer') === '1') closePanelViewer();
       });
     }
     if (ui.el.apiSourcesModal) {
@@ -4888,10 +5659,18 @@
     });
     ui.el.stocksTab.addEventListener('click', function () { PT.Router.go('stocks'); });
     ui.el.cryptoTab.addEventListener('click', function () { PT.Router.go('crypto'); });
-    ui.el.sortSelect.addEventListener('change', function () {
-      state.app.sortBy = ui.el.sortSelect.value;
-      renderAll();
-    });
+    if (ui.el.sortSelect) {
+      ui.el.sortSelect.addEventListener('change', function () {
+        state.app.sortBy = ui.el.sortSelect.value;
+        renderAll();
+      });
+    }
+    if (ui.el.holdingsSortSelect) {
+      ui.el.holdingsSortSelect.addEventListener('change', function () {
+        state.app.sortBy = ui.el.holdingsSortSelect.value;
+        renderAll();
+      });
+    }
     if (ui.el.allocationLegend) {
       ui.el.allocationLegend.addEventListener('mouseover', function (e) {
         var item = e.target.closest('.legend-item');
@@ -5023,6 +5802,10 @@
 
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      if (ui.el.panelViewerModal && !ui.el.panelViewerModal.classList.contains('hidden')) {
+        closePanelViewer();
+        return;
+      }
       if (ui.el.apiSourcesModal && !ui.el.apiSourcesModal.classList.contains('hidden')) {
         closeApiSourcesModal();
         return;
@@ -5033,7 +5816,10 @@
       }
       if (!ui.el.modal.classList.contains('hidden')) closeModal();
     });
-    window.addEventListener('resize', syncMobilePanelOrder);
+    window.addEventListener('resize', function () {
+      syncMobilePanelOrder();
+      if (!canOpenPanelViewer() && PANEL_VIEWER.type) closePanelViewer();
+    });
   }
 
   function normalizeImportedAssets() {
@@ -5096,6 +5882,7 @@
     hydrateCachedData();
     hydrateIndicatorsFromCache();
     bindEvents();
+    loadIndicatorExplorerFavoritesFromRemote();
 
     if (!location.hash) {
       location.hash = state.app.mode === 'crypto' ? '#crypto' : '#stocks';
@@ -5120,6 +5907,7 @@
     ensureCryptoAutoRefreshTimer();
 
     setInterval(refreshSelectedMarketClock, 1000);
+    setInterval(refreshQuoteFreshnessBadges, 1000 * 60);
     setInterval(autoRefresh60s, 1000 * 60 * 10);
   }
 

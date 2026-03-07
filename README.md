@@ -1,4 +1,6 @@
-# Portfolio Tracker 2026
+# MarketPilot
+
+A cockpit for your investments.
 
 Pure HTML/CSS/vanilla JS portfolio manager for stocks and crypto, served by a local Express proxy.
 

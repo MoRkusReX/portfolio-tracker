@@ -243,6 +243,37 @@
       });
       return remoteSaveQueue;
     },
+    // Fetches indicator-explorer favorites from the shared local proxy DB.
+    loadRemoteExplorerFavorites: function () {
+      return fetchJson(apiBase() + '/api/explorer-favorites', { cache: 'no-store' }).then(function (payload) {
+        var favorites = payload && payload.favorites && typeof payload.favorites === 'object'
+          ? payload.favorites
+          : { stocks: [], crypto: [] };
+        return {
+          favorites: favorites,
+          updatedAt: Math.max(0, Number(payload && payload.updatedAt || 0) || 0)
+        };
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Saves indicator-explorer favorites to the shared local proxy DB.
+    saveRemoteExplorerFavorites: function (favorites) {
+      return fetch(apiBase() + '/api/explorer-favorites', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ favorites: favorites && typeof favorites === 'object' ? favorites : { stocks: [], crypto: [] } })
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          return {
+            ok: !!response.ok,
+            updatedAt: Math.max(0, Number(payload && payload.updatedAt || 0) || 0)
+          };
+        });
+      }).catch(function () {
+        return { ok: false, updatedAt: 0 };
+      });
+    },
     // Reads a server-persisted chart cache snapshot by key.
     getRemoteChartCache: function (key) {
       var safeKey = String(key || '').trim();

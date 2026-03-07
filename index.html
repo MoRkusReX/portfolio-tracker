@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark light" />
-  <title>Stocks & Crypto Portfolio Manager (2026)</title>
+  <title>MarketPilot</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <link rel="stylesheet" href="styles/global.css" />
   <link rel="stylesheet" href="styles/themes.css" />
@@ -29,8 +29,8 @@
       <div class="brand">
         <div class="brand__mark">PT</div>
         <div>
-          <h1>Portfolio Tracker</h1>
-          <p>Stocks & Crypto Portfolio Manager (2026)</p>
+          <h1>MarketPilot</h1>
+          <p>A cockpit for your investments.</p>
         </div>
       </div>
       <div class="topbar__actions">
@@ -63,6 +63,11 @@
           <button id="holdingsPrivacyToggle" class="btn btn--ghost btn--icon" type="button" aria-label="Hide holdings" title="Hide quantities and dollar values">
             <span class="btn__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+            </span>
+          </button>
+          <button id="holdingsScrambleToggle" class="btn btn--ghost btn--icon" type="button" aria-label="Scramble holdings display" title="Scramble stock tickers, percentages, and hero amounts">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><path d="M3 7h4l3 4 4-6h7M3 17h4l2-3m4 0 2 3h6M17 5h4v4M17 15h4v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </span>
           </button>
           <button id="themeToggle" class="btn btn--ghost btn--icon" type="button" aria-label="Dark theme" title="Switch to light theme">
@@ -117,35 +122,39 @@
           </div>
         </section>
 
-        <section class="controls-row glass">
-          <div class="sort-wrap">
-            <label for="sortSelect">Sort</label>
-            <select id="sortSelect">
-              <option value="az">A-Z</option>
-              <option value="value-desc">Value (High-Low)</option>
-              <option value="value-asc">Value (Low-High)</option>
-              <option value="pl-desc">P/L (High-Low)</option>
-              <option value="pl-asc">P/L (Low-High)</option>
-              <option value="daily-pl-desc">Daily P/L (High-Low)</option>
-              <option value="daily-pl-asc">Daily P/L (Low-High)</option>
-              <option value="day-desc">Day Change (High-Low)</option>
-              <option value="day-asc">Day Change (Low-High)</option>
-            </select>
-          </div>
-          <div class="controls-row__right">
-            <button id="refreshBtn" class="btn btn--primary btn--icon controls-refresh" type="button" aria-label="Refresh prices" title="Refresh prices">
-              <span class="btn__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15.9 7.1h3.4v3.4M19.3 10.5A7.3 7.3 0 0 0 8 6.3M8.1 16.9H4.7v-3.4M4.7 13.5A7.3 7.3 0 0 0 16 17.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-            </button>
-          </div>
-        </section>
-
         <section class="portfolio-grid">
-          <div class="portfolio-list glass">
+          <div class="portfolio-list glass" id="holdingsPanel">
             <div class="section-header">
-              <h3>Holdings</h3>
-              <span id="holdingsCount" class="muted">0 assets</span>
+              <div class="holdings-header-left">
+                <h3>Holdings</h3>
+                <div class="sort-wrap holdings-sort-wrap">
+                  <label for="holdingsSortSelect">Sort</label>
+                  <select id="holdingsSortSelect">
+                    <option value="az">A-Z</option>
+                    <option value="value-desc">Value (High-Low)</option>
+                    <option value="value-asc">Value (Low-High)</option>
+                    <option value="pl-desc">P/L (High-Low)</option>
+                    <option value="pl-asc">P/L (Low-High)</option>
+                    <option value="daily-pl-desc">Daily P/L (High-Low)</option>
+                    <option value="daily-pl-asc">Daily P/L (Low-High)</option>
+                    <option value="day-desc">Day Change (High-Low)</option>
+                    <option value="day-asc">Day Change (Low-High)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="holdings-header-actions">
+                <span id="holdingsCount" class="muted">0 assets</span>
+                <button id="holdingsRefreshBtn" class="btn btn--primary btn--tiny btn--icon panel-expand-btn holdings-refresh-btn" type="button" aria-label="Refresh prices" title="Refresh prices">
+                  <span class="btn__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15.9 7.1h3.4v3.4M19.3 10.5A7.3 7.3 0 0 0 8 6.3M8.1 16.9H4.7v-3.4M4.7 13.5A7.3 7.3 0 0 0 16 17.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                </button>
+                <button id="openHoldingsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open holdings in large view" title="Open large view">
+                  <span class="btn__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                </button>
+              </div>
             </div>
             <div id="portfolioList" class="asset-list" aria-live="polite"></div>
           </div>
@@ -208,6 +217,11 @@
             <h3>Indicators</h3>
             <div id="indicatorsAssetLabel" class="muted">No asset selected</div>
           </div>
+          <button id="openIndicatorsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open indicators in large view" title="Open large view">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </button>
         </div>
         <section class="panel-block panel-block--indicators">
           <div class="panel-block__head">
@@ -226,6 +240,11 @@
             <h3>Fundamentals</h3>
             <div id="fundamentalsAssetLabel" class="muted">No asset selected</div>
           </div>
+          <button id="openFundamentalsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open fundamentals in large view" title="Open large view">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </button>
         </div>
         <section class="panel-block panel-block--fundamentals">
           <div class="panel-block__head">
@@ -278,6 +297,11 @@
             <h3>News</h3>
             <div class="muted">Market headlines and selected asset feed</div>
           </div>
+          <button id="openNewsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open news in large view" title="Open large view">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </button>
         </div>
         <section class="panel-block panel-block--news">
           <div class="panel-block__head">
@@ -460,18 +484,45 @@
           <button id="indicatorExplorerStocksTab" class="mode-switch__btn is-active" type="button" data-mode="stocks" role="tab" aria-selected="true">Stocks</button>
           <button id="indicatorExplorerCryptoTab" class="mode-switch__btn" type="button" data-mode="crypto" role="tab" aria-selected="false">Crypto</button>
         </div>
-        <div class="field-group autocomplete">
+        <div id="indicatorExplorerViewSwitch" class="news-scope-toggle" role="group" aria-label="Indicator explorer view">
+          <button id="indicatorExplorerViewAllBtn" class="btn btn--tiny btn--primary" type="button" aria-pressed="true">All</button>
+          <button id="indicatorExplorerViewFavoritesBtn" class="btn btn--tiny btn--ghost" type="button" aria-pressed="false">Favorites</button>
+        </div>
+        <div id="indicatorExplorerSearchWrap" class="field-group autocomplete">
           <label for="indicatorExplorerSearchInput">Search Symbol / Name</label>
           <input id="indicatorExplorerSearchInput" type="text" autocomplete="off" placeholder="Search TSLA or Solana" />
           <div id="indicatorExplorerSearchList" class="autocomplete__list hidden"></div>
         </div>
-        <div class="indicator-explorer-layout">
+        <section id="indicatorExplorerFavoritesPage" class="panel-block indicator-explorer-favorites-page hidden">
+          <div class="panel-block__head">
+            <div>
+              <h4>Favorites</h4>
+              <div class="muted">Watchlist-style favorites for quick open in Explore.</div>
+            </div>
+            <span id="indicatorExplorerFavoritesCount" class="muted">0 favorites</span>
+          </div>
+          <div class="indicator-explorer-favorites__table">
+            <div class="indicator-explorer-favorites__head">
+              <span>Asset</span>
+              <span>TA</span>
+              <span>Quality</span>
+              <span>Price</span>
+              <span>Day</span>
+              <span>Action</span>
+            </div>
+            <div id="indicatorExplorerFavoritesList" class="indicator-explorer-favorites"></div>
+          </div>
+        </section>
+        <div id="indicatorExplorerLayout" class="indicator-explorer-layout">
           <div class="indicator-explorer-main">
             <section class="panel-block">
               <div class="panel-block__head">
                 <div>
                   <h4 id="indicatorExplorerChartTitle">Price Chart</h4>
                   <div id="indicatorExplorerChartMeta" class="muted">Search for an asset to load its chart.</div>
+                </div>
+                <div class="indicator-explorer-head-actions">
+                  <button id="indicatorExplorerFavoriteBtn" class="btn btn--ghost btn--tiny" type="button" title="Add to favorites" aria-label="Add to favorites" aria-pressed="false">☆ Favorite</button>
                 </div>
               </div>
               <div id="indicatorExplorerChartTimeframes" class="chart-timeframes chart-timeframes--explorer" role="group" aria-label="Explorer chart timeframe"></div>
@@ -486,7 +537,9 @@
                   <h4 id="indicatorExplorerAssetLabel">No asset selected</h4>
                   <div id="indicatorExplorerModeLabel" class="muted">Stocks</div>
                 </div>
-                <span id="indicatorExplorerOverallPill" class="indicator-pill indicator-pill--neutral">Neutral</span>
+                <div class="indicator-explorer-head-actions">
+                  <span id="indicatorExplorerOverallPill" class="indicator-pill indicator-pill--neutral">Neutral</span>
+                </div>
               </div>
               <div id="indicatorExplorerMeta" class="muted indicator-meta">Search for an asset to load its indicator snapshots.</div>
               <div id="indicatorExplorerTrendMeter" class="trend-meter"></div>
@@ -521,6 +574,20 @@
     </div>
   </div>
 
+  <div id="panelViewerModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-panel-viewer="1"></div>
+    <div class="modal__dialog modal__dialog--wide panel-viewer-modal glass" role="dialog" aria-modal="true" aria-labelledby="panelViewerTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="panelViewerTitle">Panel View</h3>
+          <div id="panelViewerSubtitle" class="muted">Expanded panel preview.</div>
+        </div>
+        <button id="panelViewerCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="panelViewerHost" class="panel-viewer-host"></div>
+    </div>
+  </div>
+
   <template id="assetRowTemplate">
     <div class="asset-row-shell">
       <article class="asset-row" tabindex="0">
@@ -529,6 +596,7 @@
             <div class="asset-row__symbol"></div>
             <div class="asset-row__quote-status asset-row__quote-status--inline"></div>
             <div class="asset-row__name"></div>
+            <div class="asset-row__signals"></div>
           </div>
           <div class="asset-row__numbers">
             <div class="asset-row__value"></div>

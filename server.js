@@ -134,6 +134,49 @@ function normalizePortfolioShape(raw) {
   };
 }
 
+// Accepts wrapped or raw explorer favorites shape and normalizes/deduplicates it.
+function normalizeExplorerFavoritesShape(raw) {
+  const candidate = raw && raw.favorites && typeof raw.favorites === 'object' ? raw.favorites : raw;
+  const stocks = Array.isArray(candidate && candidate.stocks) ? candidate.stocks : [];
+  const crypto = Array.isArray(candidate && candidate.crypto) ? candidate.crypto : [];
+  const seen = new Set();
+  const out = { stocks: [], crypto: [] };
+
+  stocks.forEach((item) => {
+    const symbol = String(item && (item.yahooSymbol || item.symbol) || '').trim().toUpperCase();
+    if (!symbol) return;
+    const key = `stock:${symbol}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.stocks.push({
+      assetType: 'stock',
+      symbol,
+      yahooSymbol: symbol,
+      stooqSymbol: String(item && item.stooqSymbol || item && item.stooq || '').trim() || null,
+      market: String(item && item.market || 'US').trim() || 'US',
+      name: String(item && item.name || symbol).trim() || symbol
+    });
+  });
+
+  crypto.forEach((item) => {
+    const symbol = String(item && item.symbol || '').trim().toUpperCase();
+    const coinId = String(item && (item.coinId || item.id) || '').trim().toLowerCase();
+    if (!symbol && !coinId) return;
+    const normalizedSymbol = symbol || coinId.toUpperCase();
+    const key = `crypto:${normalizedSymbol}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.crypto.push({
+      assetType: 'crypto',
+      symbol: normalizedSymbol,
+      coinId: coinId || null,
+      name: String(item && item.name || normalizedSymbol).trim() || normalizedSymbol
+    });
+  });
+
+  return out;
+}
+
 // Runs a command against the Python SQLite bridge and parses the JSON response.
 async function runDb(command, args, input) {
   const commandArgs = [DB_SCRIPT, DB_PATH, command].concat(Array.isArray(args) ? args : []);
@@ -596,6 +639,40 @@ app.put('/api/portfolio', async (req, res) => {
   }
 });
 
+// Reads persisted indicator-explorer favorites from SQLite.
+app.get('/api/explorer-favorites', async (req, res) => {
+  try {
+    const stored = await runDb('get_state', ['explorer:favorites']);
+    return res.json({
+      favorites: normalizeExplorerFavoritesShape(stored && stored.payload),
+      updatedAt: Number(stored && stored.updatedAt || 0) || 0
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'explorer_favorites_read_failed',
+      detail: String(err && err.message || 'Failed to load explorer favorites').slice(0, 240)
+    });
+  }
+});
+
+// Persists indicator-explorer favorites to SQLite.
+app.put('/api/explorer-favorites', async (req, res) => {
+  try {
+    const favorites = normalizeExplorerFavoritesShape(req.body && req.body.favorites);
+    const result = await runDb('set_state', ['explorer:favorites'], favorites);
+    return res.json({
+      ok: true,
+      favorites,
+      updatedAt: Number(result && result.updatedAt || 0) || Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'explorer_favorites_write_failed',
+      detail: String(err && err.message || 'Failed to save explorer favorites').slice(0, 240)
+    });
+  }
+});
+
 // Builds a stable SQLite key for per-scope news snapshots.
 function dbNewsStateKey(rawKey) {
   const key = String(rawKey || '').trim();
@@ -611,8 +688,9 @@ function dbChartStateKey(rawKey) {
 }
 
 // Builds protected DB cache keys/patterns for assets currently pinned in the portfolio.
-function portfolioCacheProtection(portfolio) {
+function portfolioCacheProtection(portfolio, favorites) {
   const normalized = normalizePortfolioShape(portfolio) || { stocks: [], crypto: [] };
+  const normalizedFavorites = normalizeExplorerFavoritesShape(favorites);
   const fundamentalsKeys = [];
   const newsLikePatterns = [];
   const seenFundamentals = new Set();
@@ -651,6 +729,25 @@ function portfolioCacheProtection(portfolio) {
     }
   });
 
+  (Array.isArray(normalizedFavorites.stocks) ? normalizedFavorites.stocks : []).forEach((asset) => {
+    const symbol = String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
+    if (!symbol) return;
+    pushFundamentalsKey(`fundamentals:stock:${symbol}`);
+    pushNewsLike(`news:%:stock:${symbol}`);
+  });
+
+  (Array.isArray(normalizedFavorites.crypto) ? normalizedFavorites.crypto : []).forEach((asset) => {
+    const coinId = String(asset && (asset.coinId || asset.id) || '').trim().toLowerCase();
+    const symbol = String(asset && asset.symbol || '').trim().toUpperCase();
+    if (coinId) {
+      pushFundamentalsKey(`fundamentals:crypto:${coinId}`);
+      pushNewsLike(`news:%:crypto:${coinId}`);
+    }
+    if (symbol) {
+      pushNewsLike(`news:%:crypto:${symbol}`);
+    }
+  });
+
   return {
     fundamentalsKeys,
     newsLikePatterns
@@ -660,8 +757,14 @@ function portfolioCacheProtection(portfolio) {
 // Loads the current portfolio and maps it into protected state-key filters.
 async function loadPortfolioCacheProtection() {
   try {
-    const stored = await runDb('get_state', ['portfolio']);
-    return portfolioCacheProtection(stored && stored.payload);
+    const [storedPortfolio, storedFavorites] = await Promise.all([
+      runDb('get_state', ['portfolio']),
+      runDb('get_state', ['explorer:favorites']).catch(() => null)
+    ]);
+    return portfolioCacheProtection(
+      storedPortfolio && storedPortfolio.payload,
+      storedFavorites && storedFavorites.payload
+    );
   } catch (err) {
     return {
       fundamentalsKeys: [],

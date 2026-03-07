@@ -196,6 +196,7 @@
       theme: 'dark',
       layoutMode: 'narrow',
       hideHoldings: false,
+      scrambleHoldings: false,
       stocksAutoRefreshEnabled: false,
       cryptoAutoRefreshEnabled: false,
       stocksAutoRefreshIntervalSec: 600,

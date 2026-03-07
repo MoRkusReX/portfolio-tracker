@@ -275,6 +275,32 @@ def pinned_indicator_symbols(conn):
         symbol = str(item.get("symbol") or "").strip().upper()
         if symbol:
             pinned.add(f"{symbol}/USD")
+
+    fav_row = conn.execute(
+        "SELECT payload_json FROM app_state WHERE state_key = ?",
+        ("explorer:favorites",),
+    ).fetchone()
+    if not fav_row:
+        return pinned
+    try:
+        fav_payload = json.loads(fav_row["payload_json"])
+    except Exception:
+        return pinned
+    favorites = fav_payload.get("favorites") if isinstance(fav_payload, dict) and isinstance(fav_payload.get("favorites"), dict) else fav_payload
+    if not isinstance(favorites, dict):
+        return pinned
+    for item in favorites.get("stocks", []):
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("yahooSymbol") or item.get("symbol") or "").strip().upper()
+        if symbol:
+            pinned.add(symbol)
+    for item in favorites.get("crypto", []):
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if symbol:
+            pinned.add(f"{symbol}/USD")
     return pinned
 
 

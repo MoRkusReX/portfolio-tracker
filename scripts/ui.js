@@ -98,12 +98,77 @@
       .replace(/'/g, '&#39;');
   }
 
+  // Returns a deterministic unsigned 32-bit hash for scramble display derivations.
+  function scrambleHash32(text) {
+    var h = 2166136261 >>> 0;
+    var str = String(text || '');
+    var i;
+    for (i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  // Returns a deterministic pseudo-random unit value (0..1) for a scramble slot.
+  function scrambleUnit(seed, slot) {
+    return (scrambleHash32(String(seed || '') + '|' + String(slot || '')) % 1000000) / 1000000;
+  }
+
+  // Builds a stable fake ticker label with the same length as the original symbol.
+  function scrambleTicker(symbol, key, seed) {
+    var src = String(symbol || '').trim().toUpperCase();
+    if (!src) return '----';
+    var len = Math.max(2, Math.min(6, src.length));
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    var out = '';
+    var i;
+    for (i = 0; i < len; i++) {
+      var pick = Math.floor(scrambleUnit(seed + ':' + key, 'ticker:' + i) * chars.length) % chars.length;
+      out += chars.charAt(pick);
+    }
+    return out;
+  }
+
+  // Builds a stable fake percent value while preserving a realistic percentage range.
+  function scramblePercentValue(value, key, seed, slot) {
+    var base = isFinite(Number(value)) ? Math.abs(Number(value)) : 1;
+    var amplitude = Math.max(0.4, Math.min(28, base * 1.5 + 0.8));
+    var magnitude = 0.2 + scrambleUnit(seed + ':' + key, String(slot) + ':mag') * amplitude;
+    var direction = scrambleUnit(seed + ':' + key, String(slot) + ':sign') >= 0.5 ? 1 : -1;
+    return Number((magnitude * direction).toFixed(2));
+  }
+
+  // Builds a stable fake currency amount for UI-only obfuscation.
+  function scrambleAmountValue(value, key, seed, slot, opts) {
+    var options = opts && typeof opts === 'object' ? opts : {};
+    var base = Math.max(1, Math.abs(Number(value) || 1));
+    var factor = 0.55 + scrambleUnit(seed + ':' + key, String(slot) + ':factor') * 0.9;
+    var amount = base * factor;
+    var sign;
+    if (options.forcePositive) sign = 1;
+    else if (options.forceSign === -1 || options.forceSign === 1) sign = options.forceSign;
+    else sign = scrambleUnit(seed + ':' + key, String(slot) + ':sign') >= 0.5 ? 1 : -1;
+    return Number((amount * sign).toFixed(2));
+  }
+
+  // Builds a stable fake position size for UI-only obfuscation.
+  function scrambleQuantityValue(value, key, seed, slot) {
+    var base = Math.max(0.0001, Math.abs(Number(value) || 1));
+    var factor = 0.6 + scrambleUnit(seed + ':' + key, String(slot) + ':factor') * 1.15;
+    var amount = base * factor;
+    var decimals = base >= 100 ? 0 : (base >= 10 ? 1 : (base >= 1 ? 2 : 4));
+    return Number(amount.toFixed(decimals));
+  }
+
   function iconMarkup(name) {
     var icons = {
       layoutWide: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 9.5h8M8 12h8M8 14.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
       layoutNarrow: '<svg viewBox="0 0 24 24" focusable="false"><rect x="7" y="3" width="10" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 7.5h4M10 11h4M10 14.5h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
       eye: '<svg viewBox="0 0 24 24" focusable="false"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
       eyeOff: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 4.5 21 19.5M10.6 6.2A10.4 10.4 0 0 1 12 6c6 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.3 3.8M6.3 9A17 17 0 0 0 2.5 12s3.5 6 9.5 6a10 10 0 0 0 3-.4M10 12a2 2 0 0 0 3 1.7 2.1 2.1 0 0 0 .5-2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      scrambleOn: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 7h4l3 4 4-6h7M3 17h4l2-3m4 0 2 3h6M17 5h4v4M17 15h4v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      scrambleOff: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 7h4l3 4 4-6h7M3 17h4l2-3m4 0 2 3h6M17 5h4v4M17 15h4v4M4 4l16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       moon: '<svg viewBox="0 0 24 24" focusable="false"><path d="M14.5 3.5a8 8 0 1 0 6 13.5A9 9 0 1 1 14.5 3.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
       sun: '<svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
       bug: '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 8.5c2.7 0 4.8 2 4.8 4.6v2.2c0 2.7-2.1 4.9-4.8 4.9s-4.8-2.2-4.8-4.9v-2.2c0-2.6 2.1-4.6 4.8-4.6Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.6 8.3V6.9a2.4 2.4 0 1 1 4.8 0v1.4M4.8 10.1h2.4M16.8 10.1h2.4M5.5 15h2M16.5 15h2M8.6 5.4 7.2 4M15.4 5.4 16.8 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -128,6 +193,7 @@
         apiDebugPanel: qs('apiDebugPanel'),
         apiDebugTableBody: qs('apiDebugTableBody'),
         holdingsPrivacyToggle: qs('holdingsPrivacyToggle'),
+        holdingsScrambleToggle: qs('holdingsScrambleToggle'),
         exportBtn: qs('exportBtn'),
         importInput: qs('importInput'),
         addAssetBtn: qs('addAssetBtn'),
@@ -150,6 +216,10 @@
         totalPL: qs('totalPL'),
         totalDailyPL: qs('totalDailyPL'),
         holdingsCount: qs('holdingsCount'),
+        holdingsPanel: qs('holdingsPanel'),
+        holdingsSortSelect: qs('holdingsSortSelect'),
+        holdingsRefreshBtn: qs('holdingsRefreshBtn'),
+        openHoldingsPanelBtn: qs('openHoldingsPanelBtn'),
         portfolioList: qs('portfolioList'),
         heroCard: qs('heroCard'),
         overviewTitle: qs('overviewTitle'),
@@ -212,6 +282,9 @@
         apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
         apiSourcesContent: qs('apiSourcesContent'),
         indicatorsPanel: qs('indicatorsPanel'),
+        openIndicatorsPanelBtn: qs('openIndicatorsPanelBtn'),
+        openFundamentalsPanelBtn: qs('openFundamentalsPanelBtn'),
+        openNewsPanelBtn: qs('openNewsPanelBtn'),
         indicatorExplorerBtn: qs('indicatorExplorerBtn'),
         indicatorsAssetLabel: qs('indicatorsAssetLabel'),
         indicatorsOverallPill: qs('indicatorsOverallPill'),
@@ -222,8 +295,16 @@
         indicatorExplorerCloseBtn: qs('indicatorExplorerCloseBtn'),
         indicatorExplorerStocksTab: qs('indicatorExplorerStocksTab'),
         indicatorExplorerCryptoTab: qs('indicatorExplorerCryptoTab'),
+        indicatorExplorerViewSwitch: qs('indicatorExplorerViewSwitch'),
+        indicatorExplorerViewAllBtn: qs('indicatorExplorerViewAllBtn'),
+        indicatorExplorerViewFavoritesBtn: qs('indicatorExplorerViewFavoritesBtn'),
+        indicatorExplorerSearchWrap: qs('indicatorExplorerSearchWrap'),
+        indicatorExplorerFavoritesPage: qs('indicatorExplorerFavoritesPage'),
+        indicatorExplorerFavoritesCount: qs('indicatorExplorerFavoritesCount'),
+        indicatorExplorerLayout: qs('indicatorExplorerLayout'),
         indicatorExplorerSearchInput: qs('indicatorExplorerSearchInput'),
         indicatorExplorerSearchList: qs('indicatorExplorerSearchList'),
+        indicatorExplorerFavoritesList: qs('indicatorExplorerFavoritesList'),
         indicatorExplorerChartTitle: qs('indicatorExplorerChartTitle'),
         indicatorExplorerChartMeta: qs('indicatorExplorerChartMeta'),
         indicatorExplorerChartTimeframes: qs('indicatorExplorerChartTimeframes'),
@@ -231,6 +312,7 @@
         indicatorExplorerChartFallback: qs('indicatorExplorerChartFallback'),
         indicatorExplorerAssetLabel: qs('indicatorExplorerAssetLabel'),
         indicatorExplorerModeLabel: qs('indicatorExplorerModeLabel'),
+        indicatorExplorerFavoriteBtn: qs('indicatorExplorerFavoriteBtn'),
         indicatorExplorerOverallPill: qs('indicatorExplorerOverallPill'),
         indicatorExplorerMeta: qs('indicatorExplorerMeta'),
         indicatorExplorerTrendMeter: qs('indicatorExplorerTrendMeter'),
@@ -245,6 +327,11 @@
         indicatorExplorerNewsRefreshBtn: qs('indicatorExplorerNewsRefreshBtn'),
         indicatorExplorerNewsMeta: qs('indicatorExplorerNewsMeta'),
         indicatorExplorerNewsList: qs('indicatorExplorerNewsList'),
+        panelViewerModal: qs('panelViewerModal'),
+        panelViewerCloseBtn: qs('panelViewerCloseBtn'),
+        panelViewerTitle: qs('panelViewerTitle'),
+        panelViewerSubtitle: qs('panelViewerSubtitle'),
+        panelViewerHost: qs('panelViewerHost'),
         assetTypeInput: qs('assetTypeInput'),
         assetSearchInput: qs('assetSearchInput'),
         assetSelectedId: qs('assetSelectedId'),
@@ -401,6 +488,17 @@
       this.el.holdingsPrivacyToggle.title = hidden ? 'Show quantities and values' : 'Hide quantities and dollar values';
       this.el.holdingsPrivacyToggle.setAttribute('aria-label', hidden ? 'Show holdings' : 'Hide holdings');
     },
+    setHoldingsScramble: function (enabled) {
+      if (!this.el.holdingsScrambleToggle) return;
+      this.el.holdingsScrambleToggle.innerHTML = iconMarkup(enabled ? 'scrambleOn' : 'scrambleOff');
+      this.el.holdingsScrambleToggle.classList.toggle('btn--primary', !!enabled);
+      this.el.holdingsScrambleToggle.classList.toggle('btn--ghost', !enabled);
+      this.el.holdingsScrambleToggle.title = enabled
+        ? 'Scramble mode is on (tickers, percentages, and hero amounts are randomized in the UI)'
+        : 'Scramble stock tickers, percentages, and hero amounts in the UI';
+      this.el.holdingsScrambleToggle.setAttribute('aria-label', enabled ? 'Scramble mode on' : 'Scramble mode off');
+      this.el.holdingsScrambleToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    },
     setStocksAutoRefreshToggle: function (enabled, mode) {
       if (!this.el.stocksAutoRefreshToggle) return;
       this.el.stocksAutoRefreshToggle.textContent = 'Auto refresh (10 min): ' + (enabled ? 'On' : 'Off');
@@ -525,8 +623,9 @@
       this.el.newsSourceSelect.value = value || 'auto';
     },
     setSortValue: function (value) {
-      if (!this.el.sortSelect) return;
-      this.el.sortSelect.value = value || 'az';
+      var safe = value || 'az';
+      if (this.el.sortSelect) this.el.sortSelect.value = safe;
+      if (this.el.holdingsSortSelect) this.el.holdingsSortSelect.value = safe;
     },
     setNewsScopeToggle: function (mode, scope, hasSelectedStock, selectedStockLabel) {
       if (!this.el.newsScopeToggle || !this.el.newsScopeGeneralBtn || !this.el.newsScopeSelectedBtn) return;
@@ -559,6 +658,8 @@
     renderPortfolio: function (ctx) {
       var self = this;
       var listEl = this.el.portfolioList;
+      var scrambleEnabled = !!ctx.scrambleHoldings;
+      var scrambleSeed = String(ctx.scrambleSeed || '0');
       listEl.innerHTML = '';
       this.el.holdingsCount.textContent = ctx.items.length + ' asset' + (ctx.items.length === 1 ? '' : 's');
 
@@ -567,31 +668,75 @@
         return;
       }
 
+      function compactQualityLabel(label) {
+        var text = String(label || '').trim();
+        if (!text) return 'n/a';
+        text = text.replace(/\s+token fundamentals?$/i, '').replace(/\s+fundamentals?$/i, '').trim();
+        return text || 'n/a';
+      }
+
+      function signalTone(label, kind) {
+        var value = String(label || '').trim().toLowerCase();
+        if (!value || value === 'n/a') return 'neutral';
+        if (kind === 'ta') {
+          if (value.indexOf('bull') >= 0) return 'bullish';
+          if (value.indexOf('bear') >= 0) return 'bearish';
+          return 'neutral';
+        }
+        if (value.indexOf('strong') >= 0 || value === 'healthy' || value.indexOf('bull') >= 0 || value === 'cheap') return 'bullish';
+        if (value.indexOf('weak') >= 0 || value.indexOf('risk') >= 0 || value.indexOf('bear') >= 0 || value.indexOf('expensive') >= 0) return 'bearish';
+        return 'neutral';
+      }
+
       ctx.items.forEach(function (item) {
         var node = self.el.assetRowTemplate.content.firstElementChild.cloneNode(true);
+        var rowKey = item.key || item.id || item.symbol;
         node.dataset.key = item.key;
         var rowEl = node.querySelector('.asset-row');
         var symbolEl = node.querySelector('.asset-row__symbol');
         var nameEl = node.querySelector('.asset-row__name');
+        var signalsEl = node.querySelector('.asset-row__signals');
         if (rowEl) {
           rowEl.dataset.key = item.key;
           if (ctx.selectedKey === item.key) rowEl.classList.add('is-selected');
         }
         if (symbolEl) {
-          symbolEl.textContent = item.symbol;
-          symbolEl.title = item.name || item.symbol || '';
+          var symbolText = (scrambleEnabled && item.type === 'stock')
+            ? scrambleTicker(item.symbol, item.key || item.id || item.symbol, scrambleSeed)
+            : item.symbol;
+          symbolEl.textContent = symbolText;
+          symbolEl.title = (scrambleEnabled && item.type === 'stock')
+            ? 'Scrambled symbol'
+            : (item.name || item.symbol || '');
         }
         if (nameEl) {
           nameEl.textContent = '';
+        }
+        if (signalsEl) {
+          var taLabel = String(item.indicatorConclusion || 'n/a').trim() || 'n/a';
+          var qualityLabel = compactQualityLabel(item.qualityOverall || 'n/a');
+          var taTone = signalTone(taLabel, 'ta');
+          var qualityTone = signalTone(qualityLabel, 'fa');
+          signalsEl.innerHTML =
+            '<span class="asset-row__signal asset-row__signal--ta asset-row__signal--' + taTone + '" title="Indicators: ' + esc(taLabel) + '">TA ' + esc(taLabel) + '</span>' +
+            '<span class="asset-row__signal asset-row__signal--fa asset-row__signal--' + qualityTone + '" title="Quality: ' + esc(qualityLabel) + '">Q ' + esc(qualityLabel) + '</span>';
         }
         var valueEl = node.querySelector('.asset-row__value');
         if (ctx.hideHoldings) {
           valueEl.textContent = 'Hidden';
           valueEl.title = '';
         } else {
-          valueEl.textContent = fmtCurrency(item.marketValue);
+          var displayMarketValue = Number(item.marketValue);
+          var displayQty = Number(item.quantity);
+          var displayEntry = Number(item.entryPrice);
+          if (scrambleEnabled && item.type === 'stock') {
+            displayMarketValue = scrambleAmountValue(displayMarketValue, rowKey, scrambleSeed, 'row-value', { forcePositive: true });
+            displayQty = scrambleQuantityValue(displayQty, rowKey, scrambleSeed, 'row-qty');
+            displayEntry = scrambleAmountValue(displayEntry, rowKey, scrambleSeed, 'row-entry', { forcePositive: true });
+          }
+          valueEl.textContent = fmtCurrency(displayMarketValue);
           valueEl.title = (isFinite(Number(item.quantity)) && isFinite(Number(item.entryPrice)))
-            ? (Number(item.quantity) + ' @ ' + fmtAssetUnitPrice(Number(item.entryPrice), item.type))
+            ? (fmtNumber(displayQty) + ' @ ' + fmtAssetUnitPrice(displayEntry, item.type))
             : '';
         }
         var quoteStatusEls = node.querySelectorAll('.asset-row__quote-status');
@@ -614,7 +759,13 @@
         var dayMoveEl = node.querySelector('.asset-row__daymove');
         if (dayMoveEl) {
           var dayPct = isFinite(Number(item.dayChangePct)) ? Number(item.dayChangePct) : null;
+          if (scrambleEnabled && item.type === 'stock' && dayPct != null) {
+            dayPct = scramblePercentValue(dayPct, rowKey, scrambleSeed, 'day');
+          }
           var dayUsd = isFinite(Number(item.dayPlAmount)) ? Number(item.dayPlAmount) : null;
+          if (scrambleEnabled && item.type === 'stock' && dayUsd != null) {
+            dayUsd = scrambleAmountValue(dayUsd, rowKey, scrambleSeed, 'day-usd', { forceSign: (dayPct || 0) >= 0 ? 1 : -1 });
+          }
           var dayCls = dayPct == null ? 'pl--flat' : pctClass(dayPct);
           var arrow = dayPct == null ? '•' : (dayPct > 0 ? '▲' : (dayPct < 0 ? '▼' : '•'));
           var dayPctText = dayPct == null ? '—' : pctText(dayPct);
@@ -629,11 +780,23 @@
             '</strong>';
         }
         var plEl = node.querySelector('.asset-row__pl');
-        plEl.className = 'asset-row__pl ' + pctClass(item.plPct);
-        var plPriceText = fmtAssetUnitPrice(item.price, item.type);
+        var displayPlPct = isFinite(Number(item.plPct)) ? Number(item.plPct) : 0;
+        if (scrambleEnabled && item.type === 'stock') {
+          displayPlPct = scramblePercentValue(displayPlPct, rowKey, scrambleSeed, 'pl');
+        }
+        plEl.className = 'asset-row__pl ' + pctClass(displayPlPct);
+        var displayPrice = Number(item.price);
+        var displayPlAmount = Number(item.plAmount);
+        var displayEntryPrice = Number(item.entryPrice);
+        if (scrambleEnabled && item.type === 'stock') {
+          displayPrice = scrambleAmountValue(displayPrice, rowKey, scrambleSeed, 'row-price', { forcePositive: true });
+          displayPlAmount = scrambleAmountValue(displayPlAmount, rowKey, scrambleSeed, 'row-pl-amt', { forceSign: displayPlPct >= 0 ? 1 : -1 });
+          displayEntryPrice = scrambleAmountValue(displayEntryPrice, rowKey, scrambleSeed, 'row-entry', { forcePositive: true });
+        }
+        var plPriceText = fmtAssetUnitPrice(displayPrice, item.type);
         var plChangeText = ctx.hideHoldings
-          ? ('P/L ' + pctText(item.plPct))
-          : (fmtCurrency(item.plAmount) + ' (' + pctText(item.plPct) + ')');
+          ? ('P/L ' + pctText(displayPlPct))
+          : (fmtCurrency(displayPlAmount) + ' (' + pctText(displayPlPct) + ')');
         var plText = ctx.hideHoldings
           ? plChangeText
           : (plPriceText + ' ' + plChangeText);
@@ -645,32 +808,58 @@
             '<span class="asset-row__pl-change">' + esc(plChangeText) + '</span>'
           );
         plEl.title = isFinite(Number(item.entryPrice))
-          ? ('Avg entry: ' + fmtAssetUnitPrice(Number(item.entryPrice), item.type))
+          ? ('Avg entry: ' + fmtAssetUnitPrice(displayEntryPrice, item.type))
           : plText;
         listEl.appendChild(node);
       });
     },
-    renderTotals: function (totals, hideHoldings) {
-      this.el.totalValue.textContent = hideHoldings ? 'Hidden' : fmtHeroCurrency(totals.value);
-      var pct = totals.cost ? (totals.pl / totals.cost) * 100 : 0;
-      this.el.totalPL.textContent = hideHoldings ? pctText(pct) : (fmtHeroCurrency(totals.pl) + ' (' + pctText(pct) + ')');
+    renderTotals: function (totals, hideHoldings, options) {
+      var scrambleEnabled = !!(options && options.scrambleHoldings);
+      var scrambleSeed = String(options && options.scrambleSeed || '0');
+      var totalValue = Number(totals && totals.value || 0);
+      var totalPl = Number(totals && totals.pl || 0);
+      var pct = totals && totals.cost ? (totalPl / Number(totals.cost || 0)) * 100 : 0;
+      if (scrambleEnabled) {
+        totalValue = scrambleAmountValue(totalValue, 'hero', scrambleSeed, 'value', { forcePositive: true });
+        pct = scramblePercentValue(pct, 'hero', scrambleSeed, 'pl-pct');
+        totalPl = scrambleAmountValue(totalPl, 'hero', scrambleSeed, 'pl-amt', { forceSign: pct >= 0 ? 1 : -1 });
+      }
+      this.el.totalValue.textContent = hideHoldings ? 'Hidden' : fmtHeroCurrency(totalValue);
+      this.el.totalPL.textContent = hideHoldings ? pctText(pct) : (fmtHeroCurrency(totalPl) + ' (' + pctText(pct) + ')');
       this.el.totalPL.className = 'stat-pill__value ' + pctClass(pct);
       if (this.el.totalDailyPL) {
-        var dailyPct = totals.dailyPrev ? (totals.dailyPl / totals.dailyPrev) * 100 : 0;
+        var dailyPl = Number(totals && totals.dailyPl || 0);
+        var dailyPct = totals && totals.dailyPrev ? (dailyPl / Number(totals.dailyPrev || 0)) * 100 : 0;
+        if (scrambleEnabled) {
+          dailyPct = scramblePercentValue(dailyPct, 'hero', scrambleSeed, 'daily-pct');
+          dailyPl = scrambleAmountValue(dailyPl, 'hero', scrambleSeed, 'daily-amt', { forceSign: dailyPct >= 0 ? 1 : -1 });
+        }
         this.el.totalDailyPL.textContent = hideHoldings
           ? pctText(dailyPct)
-          : (fmtHeroCurrency(totals.dailyPl) + ' (' + pctText(dailyPct) + ')');
+          : (fmtHeroCurrency(dailyPl) + ' (' + pctText(dailyPct) + ')');
         this.el.totalDailyPL.className = 'stat-pill__value ' + pctClass(dailyPct);
       }
     },
-    renderAllocationLegend: function (items, colors, hideHoldings) {
+    renderAllocationLegend: function (items, colors, hideHoldings, options) {
+      var scrambleEnabled = !!(options && options.scrambleHoldings);
+      var scrambleSeed = String(options && options.scrambleSeed || '0');
       var total = items.reduce(function (acc, item) { return acc + (Number(item.marketValue) || 0); }, 0);
       var html = items.map(function (item, i) {
         var pct = total > 0 ? (item.marketValue / total) * 100 : 0;
+        var symbolText = item.symbol;
+        var pctTextDisplay = pct.toFixed(1);
+        var valueDisplay = Number(item.marketValue);
+        if (scrambleEnabled && item.type === 'stock') {
+          var legendKey = item.key || item.id || item.symbol;
+          symbolText = scrambleTicker(item.symbol, legendKey, scrambleSeed);
+          var fakePct = Math.abs(scramblePercentValue(pct, legendKey, scrambleSeed, 'alloc'));
+          pctTextDisplay = Math.max(0.1, Math.min(99.9, fakePct)).toFixed(1);
+          valueDisplay = scrambleAmountValue(valueDisplay, legendKey, scrambleSeed, 'alloc-amt', { forcePositive: true });
+        }
         return '<div class="legend-item" data-allocation-index="' + i + '" tabindex="0" role="button" aria-label="Highlight ' + esc(item.symbol) + ' in chart">' +
           '<span class="legend-item__dot" style="background:' + colors[i % colors.length] + '"></span>' +
-          '<span>' + esc(item.symbol) + ' • ' + pct.toFixed(1) + '%</span>' +
-          '<strong>' + (hideHoldings ? 'Hidden' : fmtCurrency(item.marketValue)) + '</strong>' +
+          '<span>' + esc(symbolText) + ' • ' + pctTextDisplay + '%</span>' +
+          '<strong>' + (hideHoldings ? 'Hidden' : fmtCurrency(valueDisplay)) + '</strong>' +
           '</div>';
       }).join('');
       this.el.allocationLegend.innerHTML = html || '<div class="muted">No allocation data</div>';
