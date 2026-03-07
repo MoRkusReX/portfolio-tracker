@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="MarketPilot icon">
+  <defs>
+    <linearGradient id="bg" x1="24" y1="20" x2="232" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b2f4d"/>
+      <stop offset=".52" stop-color="#114f77"/>
+      <stop offset="1" stop-color="#12b89f"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="78" y1="82" x2="178" y2="176" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f3fcff"/>
+      <stop offset="1" stop-color="#cbf2ff"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="148" y1="70" x2="190" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#64e4ff"/>
+      <stop offset="1" stop-color="#35f2c2"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#bg)"/>
+  <rect x="18" y="18" width="220" height="220" rx="54" fill="none" stroke="#d9f7ff" stroke-opacity=".24" stroke-width="3"/>
+  <path d="M26 74c20-22 47-32 82-32h122v34H26Z" fill="#ffffff" fill-opacity=".06"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M72 178V78l28 44 28-44v100" stroke="url(#ink)" stroke-width="14"/>
+    <path d="M144 178V78h23c24.3 0 44 19.7 44 44s-19.7 44-44 44h-23" stroke="url(#ink)" stroke-width="14"/>
+  </g>
+
+  <path d="M152 89h35l-10.5 10.5" fill="none" stroke="url(#accent)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

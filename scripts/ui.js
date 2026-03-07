@@ -209,6 +209,8 @@
         twitterFetchBtn: qs('twitterFetchBtn'),
         stocksTab: qs('stocksTab'),
         cryptoTab: qs('cryptoTab'),
+        portfolioSelect: qs('portfolioSelect'),
+        portfolioDeleteBtn: qs('portfolioDeleteBtn'),
         sortSelect: qs('sortSelect'),
         statusBadge: qs('statusBadge'),
         connectionModeBadge: qs('connectionModeBadge'),
@@ -278,6 +280,12 @@
         positionPriceInput: qs('positionPriceInput'),
         positionNote: qs('positionNote'),
         positionSubmitBtn: qs('positionSubmitBtn'),
+        portfolioNameModal: qs('portfolioNameModal'),
+        portfolioNameModalCloseBtn: qs('portfolioNameModalCloseBtn'),
+        portfolioNameCancelBtn: qs('portfolioNameCancelBtn'),
+        portfolioNameForm: qs('portfolioNameForm'),
+        portfolioNameInput: qs('portfolioNameInput'),
+        portfolioNameModeLabel: qs('portfolioNameModeLabel'),
         apiSourcesModal: qs('apiSourcesModal'),
         apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
         apiSourcesContent: qs('apiSourcesContent'),
@@ -1851,6 +1859,24 @@
         this.el.positionSubmitBtn.classList.remove('btn--danger');
         this.el.positionSubmitBtn.classList.add('btn--primary');
       }
+    },
+    openPortfolioNameModal: function (mode, suggestedName) {
+      if (!this.el.portfolioNameModal || !this.el.portfolioNameInput) return;
+      var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
+      this.el.portfolioNameModal.classList.remove('hidden');
+      this.el.portfolioNameModal.setAttribute('aria-hidden', 'false');
+      if (this.el.portfolioNameModeLabel) {
+        this.el.portfolioNameModeLabel.textContent = modeKey === 'crypto' ? 'Crypto portfolio' : 'Stocks portfolio';
+      }
+      this.el.portfolioNameInput.value = String(suggestedName || '').trim();
+      this.el.portfolioNameInput.focus();
+      this.el.portfolioNameInput.select();
+    },
+    closePortfolioNameModal: function () {
+      if (!this.el.portfolioNameModal) return;
+      this.el.portfolioNameModal.classList.add('hidden');
+      this.el.portfolioNameModal.setAttribute('aria-hidden', 'true');
+      if (this.el.portfolioNameForm) this.el.portfolioNameForm.reset();
     },
     renderApiSourcesConfig: function (config) {
       if (!this.el.apiSourcesContent) return;

@@ -13,6 +13,15 @@
     ]
   };
 
+  var DEFAULT_PORTFOLIO_COLLECTIONS = {
+    stocks: [
+      { id: 'main', name: 'Main', assets: cloneJson(DEFAULT_PORTFOLIO.stocks) }
+    ],
+    crypto: [
+      { id: 'main', name: 'Main', assets: cloneJson(DEFAULT_PORTFOLIO.crypto) }
+    ]
+  };
+
   var STOCK_SYMBOLS = [
     { symbol: 'AAPL', name: 'Apple Inc.', stooq: 'aapl.us' },
     { symbol: 'MSFT', name: 'Microsoft Corp.', stooq: 'msft.us' },
@@ -217,10 +226,13 @@
       selectedKey: null,
       selectedStocksKey: null,
       selectedCryptoKey: null,
+      activePortfolioStocks: 'main',
+      activePortfolioCrypto: 'main',
       editingAssetId: null,
       status: 'Idle'
     },
     portfolio: JSON.parse(JSON.stringify(DEFAULT_PORTFOLIO)),
+    portfolioCollections: cloneJson(DEFAULT_PORTFOLIO_COLLECTIONS),
     market: { stocks: {}, crypto: {} },
     history: { stocks: {}, crypto: {} },
     globals: {
@@ -249,6 +261,9 @@
     },
     getDefaultPortfolio: function () {
       return JSON.parse(JSON.stringify(DEFAULT_PORTFOLIO));
+    },
+    getDefaultPortfolioCollections: function () {
+      return cloneJson(DEFAULT_PORTFOLIO_COLLECTIONS);
     }
   };
 })();

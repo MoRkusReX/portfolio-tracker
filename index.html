@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark light" />
   <title>MarketPilot</title>
+  <link rel="icon" type="image/svg+xml" href="assets/icons/marketpilot-icon.svg" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <link rel="stylesheet" href="styles/global.css" />
   <link rel="stylesheet" href="styles/themes.css" />
@@ -27,11 +28,20 @@
   <div class="app-shell">
     <header class="topbar glass">
       <div class="brand">
-        <div class="brand__mark">PT</div>
+        <div class="brand__mark" aria-hidden="true">
+          <img src="assets/icons/marketpilot-icon.svg" alt="" class="brand__mark-icon" />
+        </div>
         <div>
           <h1>MarketPilot</h1>
           <p>A cockpit for your investments.</p>
         </div>
+      </div>
+      <div class="portfolio-selector topbar__portfolio-selector glass" role="group" aria-label="Active portfolio selector">
+        <select id="portfolioSelect" aria-label="Select portfolio">
+          <option value="main">Main</option>
+          <option value="__add_portfolio__">+ Add Portfolio</option>
+        </select>
+        <button id="portfolioDeleteBtn" class="btn btn--ghost btn--tiny btn--icon" type="button" aria-label="Delete selected portfolio" title="Delete selected portfolio">✕</button>
       </div>
       <div class="topbar__actions">
         <div class="topbar__group topbar__group--mode">
@@ -86,7 +96,12 @@
             </span>
           </label>
           <input id="importInput" type="file" accept="application/json" hidden />
-          <button id="indicatorExplorerBtn" class="btn btn--ghost btn--tiny" type="button">Explore</button>
+          <button id="indicatorExplorerBtn" class="btn btn--tiny" type="button" aria-label="Open Explore">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3.4 4.6 7.2v9.6L12 20.6l7.4-3.8V7.2L12 3.4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m12 12 7.4-4.8M12 12 4.6 7.2M12 12v8.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </span>
+            <span>Explore</span>
+          </button>
           <button id="addAssetBtn" class="btn btn--primary" type="button">+ Add Asset</button>
         </div>
       </div>
@@ -441,6 +456,29 @@
         <div class="modal__actions">
           <button type="button" id="positionCancelBtn" class="btn btn--ghost">Cancel</button>
           <button type="submit" id="positionSubmitBtn" class="btn btn--primary">Apply</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="portfolioNameModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-portfolio-name-modal="1"></div>
+    <div class="modal__dialog modal__dialog--portfolio-name glass" role="dialog" aria-modal="true" aria-labelledby="portfolioNameModalTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="portfolioNameModalTitle">Create Portfolio</h3>
+          <div id="portfolioNameModeLabel" class="muted portfolio-name-modal__subtitle">Stocks portfolio</div>
+        </div>
+        <button id="portfolioNameModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="portfolioNameForm" class="modal__form">
+        <div class="field-group">
+          <label for="portfolioNameInput">Portfolio Name</label>
+          <input id="portfolioNameInput" type="text" maxlength="48" placeholder="My Growth Portfolio" required />
+        </div>
+        <div class="modal__actions">
+          <button type="button" id="portfolioNameCancelBtn" class="btn btn--ghost">Cancel</button>
+          <button type="submit" class="btn btn--primary">Create Portfolio</button>
         </div>
       </form>
     </div>

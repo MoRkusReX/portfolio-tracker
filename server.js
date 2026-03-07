@@ -128,9 +128,58 @@ function normalizePortfolioShape(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const candidate = raw.portfolio && typeof raw.portfolio === 'object' ? raw.portfolio : raw;
   if (!candidate || !Array.isArray(candidate.stocks) || !Array.isArray(candidate.crypto)) return null;
+
+  function normalizeCollections(modeKey, fallbackAssets) {
+    const source = candidate.portfolios && typeof candidate.portfolios === 'object'
+      ? candidate.portfolios[modeKey]
+      : null;
+    const list = Array.isArray(source) ? source : [];
+    const out = [];
+    const seen = new Set();
+
+    if (list.length) {
+      list.forEach((item, index) => {
+        const id = String(item && item.id || '').trim() || `p-${modeKey}-${index + 1}`;
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        out.push({
+          id,
+          name: String(item && item.name || '').trim() || `Portfolio ${out.length + 1}`,
+          assets: Array.isArray(item && item.assets) ? item.assets : []
+        });
+      });
+    }
+
+    if (!out.length) {
+      out.push({
+        id: 'main',
+        name: 'Main',
+        assets: Array.isArray(fallbackAssets) ? fallbackAssets : []
+      });
+    }
+
+    return out;
+  }
+
+  function resolveActive(activeKey, list) {
+    const explicit = String(candidate && candidate[activeKey] || '').trim();
+    if (explicit && list.some((item) => String(item && item.id || '').trim() === explicit)) return explicit;
+    return String(list[0] && list[0].id || 'main');
+  }
+
+  const normalizedStocks = Array.isArray(candidate.stocks) ? candidate.stocks : [];
+  const normalizedCrypto = Array.isArray(candidate.crypto) ? candidate.crypto : [];
+  const normalizedPortfolios = {
+    stocks: normalizeCollections('stocks', normalizedStocks),
+    crypto: normalizeCollections('crypto', normalizedCrypto)
+  };
+
   return {
-    stocks: candidate.stocks,
-    crypto: candidate.crypto
+    stocks: normalizedStocks,
+    crypto: normalizedCrypto,
+    portfolios: normalizedPortfolios,
+    activePortfolioStocks: resolveActive('activePortfolioStocks', normalizedPortfolios.stocks),
+    activePortfolioCrypto: resolveActive('activePortfolioCrypto', normalizedPortfolios.crypto)
   };
 }
 
@@ -710,14 +759,33 @@ function portfolioCacheProtection(portfolio, favorites) {
     newsLikePatterns.push(safe);
   }
 
-  (Array.isArray(normalized.stocks) ? normalized.stocks : []).forEach((asset) => {
+  const stockAssets = [];
+  const cryptoAssets = [];
+  (Array.isArray(normalized.stocks) ? normalized.stocks : []).forEach((asset) => stockAssets.push(asset));
+  (Array.isArray(normalized.crypto) ? normalized.crypto : []).forEach((asset) => cryptoAssets.push(asset));
+  const stockPortfolios = normalized && normalized.portfolios && Array.isArray(normalized.portfolios.stocks)
+    ? normalized.portfolios.stocks
+    : [];
+  const cryptoPortfolios = normalized && normalized.portfolios && Array.isArray(normalized.portfolios.crypto)
+    ? normalized.portfolios.crypto
+    : [];
+  stockPortfolios.forEach((portfolioItem) => {
+    const assets = Array.isArray(portfolioItem && portfolioItem.assets) ? portfolioItem.assets : [];
+    assets.forEach((asset) => stockAssets.push(asset));
+  });
+  cryptoPortfolios.forEach((portfolioItem) => {
+    const assets = Array.isArray(portfolioItem && portfolioItem.assets) ? portfolioItem.assets : [];
+    assets.forEach((asset) => cryptoAssets.push(asset));
+  });
+
+  stockAssets.forEach((asset) => {
     const symbol = String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
     if (!symbol) return;
     pushFundamentalsKey(`fundamentals:stock:${symbol}`);
     pushNewsLike(`news:%:stock:${symbol}`);
   });
 
-  (Array.isArray(normalized.crypto) ? normalized.crypto : []).forEach((asset) => {
+  cryptoAssets.forEach((asset) => {
     const coinId = String(asset && (asset.coinId || asset.id) || '').trim().toLowerCase();
     const symbol = String(asset && asset.symbol || '').trim().toUpperCase();
     if (coinId) {

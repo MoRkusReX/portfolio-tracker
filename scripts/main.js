@@ -26,6 +26,7 @@
   var EXPLORER_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
   var EXPLORER_FAVORITES_LOCAL_CACHE_KEY = 'explorer:favorites:local';
   var REFRESH_BTN_FEEDBACK_TIMER = null;
+  var PORTFOLIO_CREATE_MODE = null;
   var HOLDINGS_SCRAMBLE_SEED = id();
   var PORTFOLIO_REMOTE_REV = 0;
   var PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = false;
@@ -1065,6 +1066,150 @@
     };
   }
 
+  // Normalizes raw portfolio payloads into per-mode collections + active portfolio ids.
+  function normalizePortfolioCollectionsPayload(raw) {
+    var candidate = raw && typeof raw === 'object' ? raw : {};
+    var fallback = state.getDefaultPortfolioCollections ? state.getDefaultPortfolioCollections() : {
+      stocks: [{ id: 'main', name: 'Main', assets: [] }],
+      crypto: [{ id: 'main', name: 'Main', assets: [] }]
+    };
+
+    function normalizeList(modeKey) {
+      var sourceCollections = candidate.portfolios && typeof candidate.portfolios === 'object'
+        ? candidate.portfolios[modeKey]
+        : null;
+      var sourceList = Array.isArray(sourceCollections) ? sourceCollections : null;
+      var fallbackAssets = Array.isArray(candidate[modeKey]) ? candidate[modeKey] : [];
+      var out = [];
+      var seen = {};
+
+      if (sourceList && sourceList.length) {
+        sourceList.forEach(function (item, index) {
+          var idRaw = String(item && item.id || '').trim();
+          var portfolioId = idRaw || ('p-' + modeKey + '-' + index);
+          if (seen[portfolioId]) return;
+          seen[portfolioId] = true;
+          var assets = Array.isArray(item && item.assets) ? item.assets : [];
+          var name = String(item && item.name || '').trim() || ('Portfolio ' + (out.length + 1));
+          out.push({
+            id: portfolioId,
+            name: name,
+            assets: clone(assets)
+          });
+        });
+      }
+
+      if (!out.length) {
+        out.push({
+          id: 'main',
+          name: 'Main',
+          assets: clone(fallbackAssets.length ? fallbackAssets : (fallback[modeKey] && fallback[modeKey][0] && fallback[modeKey][0].assets) || [])
+        });
+      }
+
+      return out;
+    }
+
+    var stocks = normalizeList('stocks');
+    var crypto = normalizeList('crypto');
+
+    function resolveActiveId(modeKey, list) {
+      var explicit = modeKey === 'stocks'
+        ? String(candidate.activePortfolioStocks || '').trim()
+        : String(candidate.activePortfolioCrypto || '').trim();
+      var fallbackId = list[0] && list[0].id ? String(list[0].id) : 'main';
+      if (!explicit) return fallbackId;
+      return list.some(function (item) { return String(item.id) === explicit; }) ? explicit : fallbackId;
+    }
+
+    return {
+      portfolios: { stocks: stocks, crypto: crypto },
+      activePortfolioStocks: resolveActiveId('stocks', stocks),
+      activePortfolioCrypto: resolveActiveId('crypto', crypto)
+    };
+  }
+
+  // Applies normalized collection state and updates active flat portfolio arrays.
+  function applyPortfolioPayload(raw) {
+    var normalized = normalizePortfolioCollectionsPayload(raw);
+    state.portfolioCollections = normalized.portfolios;
+    state.app.activePortfolioStocks = normalized.activePortfolioStocks;
+    state.app.activePortfolioCrypto = normalized.activePortfolioCrypto;
+    syncAllPortfolioArraysFromCollections();
+  }
+
+  // Returns the collection list for a mode.
+  function portfoliosForMode(mode) {
+    var key = mode === 'crypto' ? 'crypto' : 'stocks';
+    if (!state.portfolioCollections || typeof state.portfolioCollections !== 'object') {
+      state.portfolioCollections = state.getDefaultPortfolioCollections ? state.getDefaultPortfolioCollections() : { stocks: [], crypto: [] };
+    }
+    if (!Array.isArray(state.portfolioCollections[key])) state.portfolioCollections[key] = [];
+    return state.portfolioCollections[key];
+  }
+
+  // Returns the active portfolio id field for a mode.
+  function activePortfolioIdForMode(mode) {
+    return mode === 'crypto'
+      ? String(state.app.activePortfolioCrypto || '').trim()
+      : String(state.app.activePortfolioStocks || '').trim();
+  }
+
+  // Updates active portfolio id field for a mode.
+  function setActivePortfolioIdForMode(mode, portfolioId) {
+    var safeId = String(portfolioId || '').trim();
+    if (mode === 'crypto') state.app.activePortfolioCrypto = safeId;
+    else state.app.activePortfolioStocks = safeId;
+  }
+
+  // Returns active portfolio record for a mode (always resolves to an existing record).
+  function activePortfolioRecordForMode(mode) {
+    var list = portfoliosForMode(mode);
+    if (!list.length) {
+      list.push({ id: 'main', name: 'Main', assets: [] });
+    }
+    var activeId = activePortfolioIdForMode(mode);
+    var found = list.find(function (item) { return String(item.id) === activeId; }) || null;
+    if (!found) {
+      found = list[0];
+      setActivePortfolioIdForMode(mode, found.id);
+    }
+    return found;
+  }
+
+  // Copies active collection assets into flat state.portfolio arrays used by existing app logic.
+  function syncPortfolioArrayFromCollections(mode) {
+    var key = mode === 'crypto' ? 'crypto' : 'stocks';
+    var activeRecord = activePortfolioRecordForMode(mode);
+    state.portfolio[key] = clone(Array.isArray(activeRecord && activeRecord.assets) ? activeRecord.assets : []);
+  }
+
+  // Copies both mode collections into flat state.portfolio arrays.
+  function syncAllPortfolioArraysFromCollections() {
+    syncPortfolioArrayFromCollections('stocks');
+    syncPortfolioArrayFromCollections('crypto');
+  }
+
+  // Writes current flat state.portfolio arrays back to the active collection records.
+  function syncActiveCollectionsFromPortfolioArrays() {
+    ['stocks', 'crypto'].forEach(function (modeKey) {
+      var activeRecord = activePortfolioRecordForMode(modeKey);
+      activeRecord.assets = clone(Array.isArray(state.portfolio[modeKey]) ? state.portfolio[modeKey] : []);
+    });
+  }
+
+  // Builds the persisted portfolio payload (legacy flat arrays + multi-portfolio envelope).
+  function buildPortfolioPersistencePayload() {
+    syncActiveCollectionsFromPortfolioArrays();
+    return {
+      stocks: clone(state.portfolio.stocks || []),
+      crypto: clone(state.portfolio.crypto || []),
+      portfolios: clone(state.portfolioCollections || { stocks: [], crypto: [] }),
+      activePortfolioStocks: String(state.app.activePortfolioStocks || '').trim() || 'main',
+      activePortfolioCrypto: String(state.app.activePortfolioCrypto || '').trim() || 'main'
+    };
+  }
+
   // Restores local portfolio, settings, and cache state before the UI boots.
   function loadInitialState() {
     var savedPortfolio = storage.loadPortfolio();
@@ -1073,7 +1218,7 @@
 
     if (savedPortfolio && savedPortfolio.stocks && savedPortfolio.crypto) {
       PORTFOLIO_LOADED_FROM_LOCAL_STORAGE = true;
-      state.portfolio = savedPortfolio;
+      applyPortfolioPayload(savedPortfolio);
     }
 
     applySavedSettings(savedSettings);
@@ -1083,10 +1228,14 @@
 
   // Checks whether a portfolio contains at least one asset.
   function hasPortfolioEntries(portfolio) {
-    return !!(portfolio && (
-      (Array.isArray(portfolio.stocks) && portfolio.stocks.length) ||
-      (Array.isArray(portfolio.crypto) && portfolio.crypto.length)
-    ));
+    if (!portfolio) return false;
+    if ((Array.isArray(portfolio.stocks) && portfolio.stocks.length) || (Array.isArray(portfolio.crypto) && portfolio.crypto.length)) return true;
+    var collections = portfolio.portfolios && typeof portfolio.portfolios === 'object' ? portfolio.portfolios : null;
+    if (!collections) return false;
+    var stockCollections = Array.isArray(collections.stocks) ? collections.stocks : [];
+    var cryptoCollections = Array.isArray(collections.crypto) ? collections.crypto : [];
+    return stockCollections.some(function (p) { return Array.isArray(p && p.assets) && p.assets.length; }) ||
+      cryptoCollections.some(function (p) { return Array.isArray(p && p.assets) && p.assets.length; });
   }
 
   function isPortfolioShape(portfolio) {
@@ -1097,7 +1246,7 @@
   function replacePortfolioFromRemote(portfolio, updatedAt) {
     if (!portfolio || !portfolio.stocks || !portfolio.crypto) return;
     PORTFOLIO_REMOTE_REV = Math.max(PORTFOLIO_REMOTE_REV, Math.max(0, Number(updatedAt || 0) || 0));
-    state.portfolio = clone(portfolio);
+    applyPortfolioPayload(portfolio);
     state.market.stocks = {};
     state.market.crypto = {};
     state.history.stocks = {};
@@ -1116,7 +1265,7 @@
   function syncPortfolioWithServer() {
     if (state && state.app && state.app.demoModeEnabled) return Promise.resolve(null);
     if (!storage || typeof storage.loadRemotePortfolio !== 'function') return Promise.resolve(null);
-    var localPortfolio = clone(state.portfolio);
+    var localPortfolio = buildPortfolioPersistencePayload();
     return storage.loadRemotePortfolio().then(function (remoteRecord) {
       var remotePortfolio = remoteRecord && remoteRecord.portfolio ? remoteRecord.portfolio : null;
       var remoteUpdatedAt = Math.max(0, Number(remoteRecord && remoteRecord.updatedAt || 0) || 0);
@@ -1603,25 +1752,27 @@
 
   // Persists settings, cache, and the shared portfolio to their respective stores.
   function persist() {
+    var demoModeActive = !!(state && state.app && state.app.demoModeEnabled);
     var settingsPayload = buildSettingsPayload();
+    var portfolioPayload = demoModeActive ? null : buildPortfolioPersistencePayload();
 
     // localStorage quota can be exhausted by cached history/news; never let that block portfolio autosave.
-    var portfolioOk = storage.savePortfolio(state.portfolio);
+    var portfolioOk = demoModeActive ? true : storage.savePortfolio(portfolioPayload);
     var settingsOk = storage.saveSettings(settingsPayload);
 
     if (!portfolioOk || !settingsOk) {
       // Drop cache payload and retry critical data first.
       storage.saveCache({});
       state.caches = {};
-      portfolioOk = storage.savePortfolio(state.portfolio);
+      portfolioOk = demoModeActive ? true : storage.savePortfolio(portfolioPayload);
       settingsOk = storage.saveSettings(settingsPayload);
     }
 
     // Cache is best-effort only.
     storage.saveCache(state.caches);
-    if (state && state.app && state.app.demoModeEnabled) return;
+    if (demoModeActive) return;
     if (typeof storage.saveRemotePortfolio === 'function') {
-      storage.saveRemotePortfolio(state.portfolio, PORTFOLIO_REMOTE_REV).then(function (result) {
+      storage.saveRemotePortfolio(portfolioPayload, PORTFOLIO_REMOTE_REV).then(function (result) {
         if (result && result.ok) {
           PORTFOLIO_REMOTE_REV = Math.max(0, Number(result.updatedAt || 0) || 0);
           return;
@@ -1653,6 +1804,133 @@
     var safeKey = key || null;
     if (mode === 'crypto') state.app.selectedCryptoKey = safeKey;
     else state.app.selectedStocksKey = safeKey;
+  }
+
+  // Returns display name for the active portfolio in a mode.
+  function activePortfolioNameForMode(mode) {
+    var active = activePortfolioRecordForMode(mode);
+    return String(active && active.name || 'Main');
+  }
+
+  // Renders the topbar portfolio selector for the active mode.
+  function renderPortfolioSelector() {
+    if (!ui || !ui.el || !ui.el.portfolioSelect) return;
+    var modeKey = state.app.mode === 'crypto' ? 'crypto' : 'stocks';
+    var list = portfoliosForMode(modeKey);
+    var activeId = activePortfolioIdForMode(modeKey) || (list[0] && list[0].id) || 'main';
+    var addValue = '__add_portfolio__';
+    var demoModeActive = !!(state && state.app && state.app.demoModeEnabled);
+    ui.el.portfolioSelect.innerHTML = list.map(function (portfolio) {
+      var idText = String(portfolio && portfolio.id || '');
+      var nameText = String(portfolio && portfolio.name || 'Portfolio').trim() || 'Portfolio';
+      return '<option value="' + escapeHtml(idText) + '">' + escapeHtml(nameText) + '</option>';
+    }).join('') + '<option value="' + addValue + '">+ Add Portfolio</option>';
+    ui.el.portfolioSelect.value = activeId;
+    ui.el.portfolioSelect.disabled = demoModeActive;
+    ui.el.portfolioSelect.title = demoModeActive
+      ? 'Portfolio selector is disabled while demo mode is active'
+      : 'Choose active ' + (modeKey === 'crypto' ? 'crypto' : 'stocks') + ' portfolio';
+    if (ui.el.portfolioDeleteBtn) {
+      var disabled = demoModeActive || list.length <= 1;
+      ui.el.portfolioDeleteBtn.disabled = disabled;
+      ui.el.portfolioDeleteBtn.title = disabled
+        ? (demoModeActive
+          ? 'Portfolio delete is disabled while demo mode is active'
+          : 'Cannot delete the only portfolio')
+        : ('Delete portfolio "' + activePortfolioNameForMode(modeKey) + '"');
+    }
+  }
+
+  // Switches active portfolio for a mode and rebinds state.portfolio arrays.
+  function switchActivePortfolio(mode, portfolioId) {
+    var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
+    syncActiveCollectionsFromPortfolioArrays();
+    setActivePortfolioIdForMode(modeKey, portfolioId);
+    syncPortfolioArrayFromCollections(modeKey);
+    normalizeImportedAssets();
+    hydrateCachedData();
+    hydrateIndicatorsFromCache();
+    setStoredSelectionForMode(modeKey, null);
+    if (state.app.mode === modeKey) state.app.selectedKey = null;
+    renderAll();
+  }
+
+  // Creates an empty portfolio record and makes it the active portfolio for the mode.
+  function createPortfolioForMode(mode, name) {
+    var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
+    var safeName = String(name || '').trim();
+    if (!safeName) return false;
+    syncActiveCollectionsFromPortfolioArrays();
+    var list = portfoliosForMode(modeKey);
+    var newId = id();
+    list.push({
+      id: newId,
+      name: safeName,
+      assets: []
+    });
+    switchActivePortfolio(modeKey, newId);
+    setStatus('Created portfolio "' + safeName + '"');
+    return true;
+  }
+
+  // Opens the in-app portfolio naming modal for the target mode.
+  function openPortfolioNameModal(mode) {
+    if (!ui || !ui.el || !ui.el.portfolioNameModal) return;
+    var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
+    var suggestedName = 'Portfolio ' + (portfoliosForMode(modeKey).length + 1);
+    PORTFOLIO_CREATE_MODE = modeKey;
+    renderPortfolioSelector();
+    ui.openPortfolioNameModal(modeKey, suggestedName);
+  }
+
+  // Closes the portfolio naming modal and clears pending create context.
+  function closePortfolioNameModal() {
+    PORTFOLIO_CREATE_MODE = null;
+    if (!ui || !ui.el || !ui.el.portfolioNameModal) return;
+    ui.closePortfolioNameModal();
+    renderPortfolioSelector();
+  }
+
+  // Validates and submits the portfolio naming modal form.
+  function submitPortfolioNameModal() {
+    if (!PORTFOLIO_CREATE_MODE || !ui || !ui.el || !ui.el.portfolioNameInput) {
+      closePortfolioNameModal();
+      return;
+    }
+    var name = String(ui.el.portfolioNameInput.value || '').trim();
+    if (!name) {
+      ui.el.portfolioNameInput.focus();
+      return;
+    }
+    var modeKey = PORTFOLIO_CREATE_MODE;
+    closePortfolioNameModal();
+    createPortfolioForMode(modeKey, name);
+  }
+
+  // Opens the portfolio create modal in current mode.
+  function addPortfolioForMode(mode) {
+    openPortfolioNameModal(mode);
+  }
+
+  // Deletes active portfolio in a mode after confirmation; keeps at least one portfolio.
+  function deleteActivePortfolioForMode(mode) {
+    var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
+    var list = portfoliosForMode(modeKey);
+    if (list.length <= 1) {
+      window.alert('At least one portfolio must remain.');
+      return;
+    }
+    var active = activePortfolioRecordForMode(modeKey);
+    var name = String(active && active.name || 'this portfolio');
+    var ok = window.confirm('Delete portfolio "' + name + '"? This removes its assets only.');
+    if (!ok) return;
+    syncActiveCollectionsFromPortfolioArrays();
+    var activeId = String(active && active.id || '');
+    var filtered = list.filter(function (item) { return String(item.id) !== activeId; });
+    state.portfolioCollections[modeKey] = filtered;
+    var next = filtered[0];
+    switchActivePortfolio(modeKey, next && next.id);
+    setStatus('Deleted portfolio "' + name + '"');
   }
 
   // Returns cached overall indicator conclusion for an asset row, if available.
@@ -2325,6 +2603,7 @@
     ui.setTwelveDataToggle(!!state.app.twelveDataEnabled);
     ui.setConnectionModeBadge();
     ui.setModeTabs(state.app.mode);
+    renderPortfolioSelector();
     syncNewsSourceSelectForMode(state.app.mode);
     ui.setSortValue(state.app.sortBy);
     var items = getModeComputedItems(state.app.mode);
@@ -2468,6 +2747,20 @@
     });
   }
 
+  // Builds a stable signature for favorites payload equality checks.
+  function indicatorExplorerFavoritesSignature(payload) {
+    var normalized = normalizeIndicatorExplorerFavorites(payload);
+    var stockKeys = (normalized.stocks || []).map(function (item) {
+      return 'stock:' + String(item && (item.yahooSymbol || item.symbol) || '').trim().toUpperCase();
+    }).sort();
+    var cryptoKeys = (normalized.crypto || []).map(function (item) {
+      var symbol = String(item && item.symbol || '').trim().toUpperCase();
+      var coinId = String(item && item.coinId || '').trim().toLowerCase();
+      return 'crypto:' + (symbol || coinId.toUpperCase()) + ':' + coinId;
+    }).sort();
+    return stockKeys.join('|') + '||' + cryptoKeys.join('|');
+  }
+
   // Persists favorites in local cache as offline fallback for full-page refreshes.
   function saveIndicatorExplorerFavoritesToLocalCache(payload) {
     var normalized = normalizeIndicatorExplorerFavorites(payload);
@@ -2563,6 +2856,9 @@
           ? localFallback
           : normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
         INDICATOR_EXPLORER.favoritesLoaded = hasIndicatorExplorerFavorites(INDICATOR_EXPLORER.favorites);
+        if (hasIndicatorExplorerFavorites(localFallback)) {
+          saveIndicatorExplorerFavoritesToRemote();
+        }
         return INDICATOR_EXPLORER.favorites;
       }
       var loaded = normalizeIndicatorExplorerFavorites(record && record.favorites);
@@ -2572,6 +2868,9 @@
       INDICATOR_EXPLORER.favorites = merged;
       INDICATOR_EXPLORER.favoritesLoaded = true;
       saveIndicatorExplorerFavoritesToLocalCache(merged);
+      if (indicatorExplorerFavoritesSignature(merged) !== indicatorExplorerFavoritesSignature(loaded)) {
+        saveIndicatorExplorerFavoritesToRemote();
+      }
       return merged;
     }).catch(function () {
       INDICATOR_EXPLORER.favorites = hasIndicatorExplorerFavorites(localFallback)
@@ -3988,7 +4287,7 @@
   function setDemoModeEnabled(enabled) {
     if (!!enabled === !!state.app.demoModeEnabled) return Promise.resolve();
     if (enabled) {
-      storage.saveDemoPortfolioBackup(clone(state.portfolio));
+      storage.saveDemoPortfolioBackup(buildPortfolioPersistencePayload());
       setStatus('Building demo portfolio...');
       return buildDemoPortfolio().then(function (demoPortfolio) {
         state.portfolio = demoPortfolio;
@@ -4008,7 +4307,7 @@
       setStatus('No demo backup found to restore');
       return Promise.resolve();
     }
-    state.portfolio = backup;
+    applyPortfolioPayload(backup);
     state.app.demoModeEnabled = false;
     state.app.selectedKey = null;
     state.app.selectedStocksKey = null;
@@ -5468,7 +5767,7 @@
     ui.el.exportBtn.addEventListener('click', function () {
       storage.exportPortfolioFile({
         exportedAt: new Date().toISOString(),
-        portfolio: state.portfolio,
+        portfolio: buildPortfolioPersistencePayload(),
         settings: buildSettingsPayload()
       });
       setStatus('Portfolio exported');
@@ -5479,7 +5778,7 @@
       storage.importPortfolioFile(file).then(function (payload) {
         var p = payload.portfolio || payload;
         if (!p || !Array.isArray(p.stocks) || !Array.isArray(p.crypto)) throw new Error('Expected {stocks, crypto}');
-        state.portfolio = p;
+        applyPortfolioPayload(p);
         if (payload && payload.settings && typeof payload.settings === 'object') {
           applySavedSettings(payload.settings);
         } else {
@@ -5487,8 +5786,21 @@
           state.app.selectedKey = null;
           state.app.selectedStocksKey = null;
           state.app.selectedCryptoKey = null;
+          state.app.activePortfolioStocks = state.app.activePortfolioStocks || 'main';
+          state.app.activePortfolioCrypto = state.app.activePortfolioCrypto || 'main';
         }
         storage.clearDemoPortfolioBackup();
+        state.market.stocks = {};
+        state.market.crypto = {};
+        state.history.stocks = {};
+        state.history.crypto = {};
+        state.news = {};
+        state.twitter = {};
+        state.events = {};
+        state.fundamentals = { stocks: {}, crypto: {} };
+        normalizeImportedAssets();
+        hydrateCachedData();
+        hydrateIndicatorsFromCache();
         renderAll();
         if (state.app.mode === 'crypto' && state.app.cryptoAutoRefreshEnabled) {
           refreshVisibleData();
@@ -5657,6 +5969,33 @@
       renderDetails();
       setStatus('Social links updated');
     });
+    if (ui.el.portfolioSelect) {
+      ui.el.portfolioSelect.addEventListener('change', function () {
+        if (state.app.demoModeEnabled) {
+          renderPortfolioSelector();
+          return;
+        }
+        var rawValue = String(ui.el.portfolioSelect.value || '').trim();
+        if (!rawValue) {
+          renderPortfolioSelector();
+          return;
+        }
+        if (rawValue === '__add_portfolio__') {
+          addPortfolioForMode(state.app.mode);
+          return;
+        }
+        switchActivePortfolio(state.app.mode, rawValue);
+      });
+    }
+    if (ui.el.portfolioDeleteBtn) {
+      ui.el.portfolioDeleteBtn.addEventListener('click', function () {
+        if (state.app.demoModeEnabled) {
+          renderPortfolioSelector();
+          return;
+        }
+        deleteActivePortfolioForMode(state.app.mode);
+      });
+    }
     ui.el.stocksTab.addEventListener('click', function () { PT.Router.go('stocks'); });
     ui.el.cryptoTab.addEventListener('click', function () { PT.Router.go('crypto'); });
     if (ui.el.sortSelect) {
@@ -5722,6 +6061,20 @@
     if (ui.el.positionModal) {
       ui.el.positionModal.addEventListener('click', function (e) {
         if (e.target && e.target.getAttribute('data-close-position-modal') === '1') closePositionActionModal();
+      });
+    }
+    [ui.el.portfolioNameModalCloseBtn, ui.el.portfolioNameCancelBtn].forEach(function (btn) {
+      if (btn) btn.addEventListener('click', closePortfolioNameModal);
+    });
+    if (ui.el.portfolioNameModal) {
+      ui.el.portfolioNameModal.addEventListener('click', function (e) {
+        if (e.target && e.target.getAttribute('data-close-portfolio-name-modal') === '1') closePortfolioNameModal();
+      });
+    }
+    if (ui.el.portfolioNameForm) {
+      ui.el.portfolioNameForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        submitPortfolioNameModal();
       });
     }
 
@@ -5812,6 +6165,10 @@
       }
       if (ui.el.positionModal && !ui.el.positionModal.classList.contains('hidden')) {
         closePositionActionModal();
+        return;
+      }
+      if (ui.el.portfolioNameModal && !ui.el.portfolioNameModal.classList.contains('hidden')) {
+        closePortfolioNameModal();
         return;
       }
       if (!ui.el.modal.classList.contains('hidden')) closeModal();

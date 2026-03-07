@@ -17,31 +17,79 @@
     return arr;
   }
 
+  // Builds a deterministic signature so allocation chart updates only when data truly changes.
+  function allocationSignature(labels, values) {
+    var safeLabels = Array.isArray(labels) ? labels : [];
+    var safeValues = Array.isArray(values) ? values : [];
+    var parts = [];
+    for (var i = 0; i < Math.max(safeLabels.length, safeValues.length); i++) {
+      var label = String(safeLabels[i] || '');
+      var value = Number(safeValues[i]);
+      var norm = isFinite(value) ? value.toFixed(8) : 'NaN';
+      parts.push(label + ':' + norm);
+    }
+    return parts.join('|');
+  }
+
   PT.ChartManager = {
     pie: null,
+    pieSignature: '',
     line: null,
     lineCharts: {},
     dominance: null,
     renderAllocation: function (canvas, fallbackEl, labels, values) {
-      destroy(this.pie);
       if (!chartAvailable() || !canvas) {
+        destroy(this.pie);
+        this.pie = null;
+        this.pieSignature = '';
         if (fallbackEl) fallbackEl.classList.remove('hidden');
         return;
       }
       if (fallbackEl) fallbackEl.classList.add('hidden');
-      this.pie = new Chart(canvas.getContext('2d'), {
-        type: 'doughnut',
-        data: {
-          labels: labels,
-          datasets: [{ data: values, backgroundColor: palette(values.length), borderWidth: 0, hoverOffset: 10 }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          cutout: '62%',
-          plugins: { legend: { display: false } }
-        }
-      });
+      var safeLabels = Array.isArray(labels) ? labels.slice() : [];
+      var safeValues = Array.isArray(values) ? values.slice() : [];
+      var signature = allocationSignature(safeLabels, safeValues);
+      var colors = palette(safeValues.length);
+      var hasReusable = !!(this.pie && this.pie.canvas === canvas);
+
+      if (!hasReusable && this.pie) {
+        destroy(this.pie);
+        this.pie = null;
+        this.pieSignature = '';
+      }
+
+      if (!this.pie) {
+        this.pie = new Chart(canvas.getContext('2d'), {
+          type: 'doughnut',
+          data: {
+            labels: safeLabels,
+            datasets: [{ data: safeValues, backgroundColor: colors, borderWidth: 0, hoverOffset: 10 }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '62%',
+            animation: false,
+            plugins: { legend: { display: false } }
+          }
+        });
+        this.pieSignature = signature;
+        return;
+      }
+
+      if (this.pieSignature === signature) return;
+
+      this.pie.data.labels = safeLabels;
+      if (!this.pie.data.datasets || !this.pie.data.datasets[0]) {
+        this.pie.data.datasets = [{ data: safeValues, backgroundColor: colors, borderWidth: 0, hoverOffset: 10 }];
+      } else {
+        this.pie.data.datasets[0].data = safeValues;
+        this.pie.data.datasets[0].backgroundColor = colors;
+        this.pie.data.datasets[0].borderWidth = 0;
+        this.pie.data.datasets[0].hoverOffset = 10;
+      }
+      this.pie.update('none');
+      this.pieSignature = signature;
     },
     highlightAllocationIndex: function (index) {
       if (!this.pie || !isFinite(Number(index))) return;
