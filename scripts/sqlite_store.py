@@ -215,6 +215,10 @@ def upsert_candles(conn):
             close_v = float(row["close"])
         except Exception:
             continue
+        if open_v <= 0 or high_v <= 0 or low_v <= 0 or close_v <= 0:
+            continue
+        if high_v < low_v:
+            continue
         volume = row.get("volume")
         try:
             volume_v = None if volume is None else float(volume)

@@ -661,7 +661,7 @@
       var sourcePref = String(options && options.source || 'auto').toLowerCase();
       var enabledOrdered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
         ? PT.ApiSources.getOrdered('news', 'stock')
-        : ['marketaux', 'yahoo', 'tickertick', 'alphavantage'];
+        : ['marketaux', 'tickertick', 'alphavantage'];
       var ordered = sourcePref !== 'auto'
         ? (enabledOrdered.indexOf(sourcePref) >= 0 ? [sourcePref] : enabledOrdered.slice())
         : enabledOrdered.slice();
@@ -689,7 +689,7 @@
       var strictFreshness = sourcePref === 'auto';
       var enabledOrdered = (PT.ApiSources && typeof PT.ApiSources.getOrdered === 'function')
         ? PT.ApiSources.getOrdered('news', asset.type === 'crypto' ? 'crypto' : 'stock')
-        : ['marketaux', 'yahoo', 'tickertick', 'alphavantage'];
+        : ['marketaux', 'tickertick', 'alphavantage'];
       var ordered = sourcePref !== 'auto'
         ? (enabledOrdered.indexOf(sourcePref) >= 0 ? [sourcePref] : enabledOrdered.slice())
         : enabledOrdered.slice();

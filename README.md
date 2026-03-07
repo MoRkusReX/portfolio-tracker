@@ -9,7 +9,7 @@ Pure HTML/CSS/vanilla JS portfolio manager for stocks and crypto, served by a lo
 - Persistent fundamentals cache in the same SQLite database (stocks + crypto)
 - Stocks quotes/historical CSV via Stooq
 - Crypto quotes/OHLC via CoinGecko
-- Stock fundamentals via Financial Modeling Prep (FMP)
+- Stock fundamentals via Financial Modeling Prep (FMP) with Finnhub fallback for unsupported symbols
 - Token fundamentals via CoinGecko (optional DefiLlama protocol metrics)
 - News via Marketaux (default), Yahoo, TickerTick, Alpha Vantage, and CryptoPanic with cached fallback
 - Twitter/X section with Nitter links and optional proxy attempt
@@ -20,7 +20,7 @@ Pure HTML/CSS/vanilla JS portfolio manager for stocks and crypto, served by a lo
 ## Local Run
 
 1. Make sure `node` and `python3` are installed.
-2. Optional: create `.env` in the project root and set any of: `TWELVEDATA_API_KEY=...`, `COINMARKETCAP_API_KEY=...`, `FMP_API_KEY=...`, `MARKETAUX_API_KEY=...`, `ALPHAVANTAGE_API_KEY=...`.
+2. Optional: create `.env` in the project root and set any of: `TWELVEDATA_API_KEY=...`, `COINMARKETCAP_API_KEY=...`, `FMP_API_KEY=...`, `FINNHUB_API_KEY=...`, `MARKETAUX_API_KEY=...`, `ALPHAVANTAGE_API_KEY=...`.
 3. Run `./start-local.sh`.
 4. Open the printed local URL, usually `http://127.0.0.1:5500/`.
 
@@ -37,7 +37,7 @@ Because the portfolio now lives in the local SQLite store, the phone and desktop
 
 ## Docker
 
-1. Optional: create a `.env` file with any of: `TWELVEDATA_API_KEY=...`, `COINMARKETCAP_API_KEY=...`, `FMP_API_KEY=...`, `MARKETAUX_API_KEY=...`, `ALPHAVANTAGE_API_KEY=...`.
+1. Optional: create a `.env` file with any of: `TWELVEDATA_API_KEY=...`, `COINMARKETCAP_API_KEY=...`, `FMP_API_KEY=...`, `FINNHUB_API_KEY=...`, `MARKETAUX_API_KEY=...`, `ALPHAVANTAGE_API_KEY=...`.
 2. Run `docker compose up --build`.
 3. Open `http://localhost:5500/` on the host machine, or `http://<your-lan-ip>:5500/` from another device on the same LAN.
 

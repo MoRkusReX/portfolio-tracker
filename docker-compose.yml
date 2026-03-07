@@ -10,5 +10,9 @@ services:
       DB_PATH: /app/data/portfolio-tracker.db
       TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
       COINMARKETCAP_API_KEY: ${COINMARKETCAP_API_KEY:-}
+      FMP_API_KEY: ${FMP_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-${FINHUB_API_KEY:-}}
+      MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
+      ALPHAVANTAGE_API_KEY: ${ALPHAVANTAGE_API_KEY:-}
     volumes:
       - ./data:/app/data

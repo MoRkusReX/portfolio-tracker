@@ -8,9 +8,9 @@ const cors = require('cors');
 const axios = require('axios');
 const { createFundamentalsService } = require('./scripts/fundamentals-service.js');
 
-// Loads .env values without introducing another dependency.
-function loadDotEnv() {
-  const envPath = path.join(__dirname, '.env');
+// Loads one .env-style file without introducing another dependency.
+function loadDotEnvFile(fileName) {
+  const envPath = path.join(__dirname, fileName);
   if (!fs.existsSync(envPath)) return;
   const raw = fs.readFileSync(envPath, 'utf8');
   raw.split(/\r?\n/).forEach((line) => {
@@ -19,13 +19,21 @@ function loadDotEnv() {
     const eqIndex = trimmed.indexOf('=');
     if (eqIndex <= 0) return;
     const key = trimmed.slice(0, eqIndex).trim();
-    if (!key || Object.prototype.hasOwnProperty.call(process.env, key)) return;
+    if (!key) return;
     let value = trimmed.slice(eqIndex + 1).trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith('\'') && value.endsWith('\''))) {
       value = value.slice(1, -1);
     }
+    const existing = process.env[key];
+    if (existing != null && String(existing).trim() !== '') return;
     process.env[key] = value;
   });
+}
+
+// Loads .env first and .env.local after it so local overrides can fill missing keys.
+function loadDotEnv() {
+  loadDotEnvFile('.env');
+  loadDotEnvFile('.env.local');
 }
 
 loadDotEnv();
@@ -50,6 +58,14 @@ const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
 const MARKETAUX_API_KEY = String(process.env.MARKETAUX_API_KEY || '').trim();
 // Holds the Alpha Vantage API key for server-side stock news requests.
 const ALPHAVANTAGE_API_KEY = String(process.env.ALPHAVANTAGE_API_KEY || '').trim();
+// Holds the Finnhub API key for stock fundamentals fallback requests.
+const FINNHUB_API_KEY = String(
+  process.env.FINNHUB_API_KEY ||
+  process.env.FINHUB_API_KEY ||
+  process.env.FINNHUB_KEY ||
+  process.env.FINHUB_KEY ||
+  ''
+).trim();
 // Chooses the Python interpreter used for the SQLite bridge helper.
 const PYTHON_BIN = String(process.env.PYTHON_BIN || 'python3').trim() || 'python3';
 // Resolves the on-disk SQLite database location.
@@ -140,6 +156,7 @@ async function runDb(command, args, input) {
 const fundamentalsService = createFundamentalsService({
   runDb,
   fmpApiKey: FMP_API_KEY,
+  finnhubApiKey: FINNHUB_API_KEY,
   userAgent: BROWSER_UA
 });
 

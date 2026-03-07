@@ -76,7 +76,6 @@
       note: 'News panel feeds',
       sources: [
         { id: 'marketaux', label: 'Marketaux', assetTypes: ['stock'], enabled: true, requiresKey: true },
-        { id: 'yahoo', label: 'Yahoo', assetTypes: ['stock', 'crypto'], enabled: true },
         { id: 'tickertick', label: 'TickerTick', assetTypes: ['stock', 'crypto'], enabled: true },
         { id: 'alphavantage', label: 'Alpha Vantage', assetTypes: ['stock'], enabled: true, requiresKey: true },
         { id: 'cryptopanic', label: 'CryptoPanic', assetTypes: ['crypto'], enabled: true }

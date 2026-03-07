@@ -827,6 +827,22 @@
         return 'fundamentals-chip fundamentals-chip--neutral';
       }
 
+      function isTechnicalFundamentalsNote(text) {
+        var v = String(text || '').trim().toLowerCase();
+        if (!v) return false;
+        return (
+          v.indexOf('using sec fallback') >= 0 ||
+          v.indexOf('using finnhub fallback') >= 0 ||
+          v.indexOf('data unavailable') >= 0 ||
+          v.indexOf('premium query parameter') >= 0 ||
+          v.indexOf('legacy endpoint') >= 0 ||
+          v.indexOf('using cached') >= 0 ||
+          v.indexOf('post-earnings refresh failed') >= 0 ||
+          v.indexOf('finnhub') >= 0 ||
+          v.indexOf('fmp') >= 0
+        );
+      }
+
       function daysUntilDateOnly(dateOnly) {
         var raw = String(dateOnly || '').trim();
         if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
@@ -899,11 +915,12 @@
       var isStockAsset = !!(asset && asset.type === 'stock');
       var nextEarningsDate = String(panel.nextEarningsDate || '').trim();
       var nextEarningsRelative = String(panel.nextEarningsRelative || '').trim();
+      var nextEarningsReason = String(panel.nextEarningsReason || '').trim();
       var earningsState = String(panel.earningsState || '').trim();
-      var nextEarningsText = nextEarningsDate || 'n/a';
+      var nextEarningsText = nextEarningsDate || (nextEarningsReason || 'n/a');
       var nextEarningsDaysAway = daysUntilDateOnly(nextEarningsDate);
       var showEarningsSoonAlert = nextEarningsDaysAway != null && nextEarningsDaysAway >= 0 && nextEarningsDaysAway < 7;
-      if (nextEarningsRelative && nextEarningsRelative.toLowerCase() !== nextEarningsText.toLowerCase()) {
+      if (nextEarningsDate && nextEarningsRelative && nextEarningsRelative.toLowerCase() !== nextEarningsText.toLowerCase()) {
         nextEarningsText += ' • ' + nextEarningsRelative;
       }
 
@@ -937,6 +954,7 @@
       }
       if (this.el.fundamentalsMeta) {
         var meta = panel.note || '';
+        if (isTechnicalFundamentalsNote(meta)) meta = '';
         if (!meta && fetchedAt > 0) meta = 'Updated ' + new Date(fetchedAt).toLocaleString();
         this.el.fundamentalsMeta.textContent = meta || (fallbackMsg || 'Fundamentals ready.');
       }
@@ -984,9 +1002,14 @@
           '<div class="fundamentals-section__grid">' +
             metrics.map(function (metric) {
               var explain = metricExplanation(metric);
+              var reasonText = String(metric && metric.reasonIfUnavailable || '').trim();
+              var metricDisplay = metric && metric.display ? String(metric.display) : 'n/a';
+              var showReason = (!metric || metric.value == null) && !!reasonText;
+              var valueText = showReason ? 'Unavailable' : metricDisplay;
               return '<article class="fundamentals-metric">' +
                 '<div class="fundamentals-metric__head"><span>' + esc(metric && metric.label ? metric.label : '') + '</span><span class="' + chipClass(metric && metric.status) + '">' + esc(metric && metric.status ? metric.status : 'Neutral') + '</span></div>' +
-                '<strong>' + esc(metric && metric.display ? metric.display : 'n/a') + '</strong>' +
+                '<strong>' + esc(valueText) + '</strong>' +
+                (showReason ? ('<small class="fundamentals-metric__reason">' + esc(reasonText) + '</small>') : '') +
                 '<span class="fundamentals-metric__help" tabindex="0" role="button" aria-label="What is ' + esc(metric && metric.label ? metric.label : 'this metric') + '?" data-tooltip="' + esc(explain) + '">?</span>' +
               '</article>';
             }).join('') +
@@ -1145,6 +1168,8 @@
       }
 
       function fmtIndicator(value) {
+        if (value == null) return 'n/a';
+        if (typeof value === 'string' && !value.trim()) return 'n/a';
         var numValue = Number(value);
         if (!isFinite(numValue)) return 'n/a';
         var abs = Math.abs(numValue);
@@ -1173,8 +1198,18 @@
       }
 
       function fmtPctMaybe(value) {
+        if (value == null) return 'n/a';
+        if (typeof value === 'string' && !value.trim()) return 'n/a';
         var n = Number(value);
         return isFinite(n) ? pctText(n) : 'n/a';
+      }
+
+      function fmtPctAbsolute(value) {
+        if (value == null) return 'n/a';
+        if (typeof value === 'string' && !value.trim()) return 'n/a';
+        var n = Number(value);
+        if (!isFinite(n)) return 'n/a';
+        return Math.abs(n).toFixed(2) + '%';
       }
 
       function asScore(value) {
@@ -1183,14 +1218,16 @@
       }
 
       function fmtTiny(value) {
+        if (value == null) return 'n/a';
+        if (typeof value === 'string' && !value.trim()) return 'n/a';
         var n = Number(value);
         if (!isFinite(n)) return 'n/a';
         return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 });
       }
 
       function trendLabelFromScore(score) {
-        if (score >= 2) return 'Bullish';
-        if (score <= -2) return 'Bearish';
+        if (score >= 3) return 'Bullish';
+        if (score <= -3) return 'Bearish';
         return 'Neutral';
       }
 
@@ -1213,7 +1250,6 @@
           };
         });
         var overallScore = isFinite(Number(provided.overallScore)) ? Number(provided.overallScore) : weighted;
-        var overallLabel = provided.overallLabel || (overallScore >= 4 ? 'Bullish' : (overallScore <= -4 ? 'Bearish' : 'Neutral'));
         var rowHtml = ['1d', '1w', '1m'].map(function (key) {
           var row = rows[key];
           var b = row.breakdown || {};
@@ -1228,14 +1264,15 @@
               '<span>RSI ' + esc(String(asScore(b.rsiScore))) + ' • value ' + esc(fmtTiny(b.rsiValue)) + '</span>' +
               '<span>MACD ' + esc(String(asScore(b.macdScore))) + ' • line ' + esc(fmtTiny(b.macdLine)) + ' • signal ' + esc(fmtTiny(b.macdSignal)) + ' • hist ' + esc(fmtTiny(b.macdHistogram)) + '</span>' +
               '<span>SR ' + esc(String(asScore(b.srScore))) + ' • ' + esc(String(b.srStatus || 'n/a')) + '</span>' +
+              '<span>ADX ' + esc(String(asScore(b.adxScore))) + ' • value ' + esc(fmtTiny(b.adxValue)) + ' • ' + esc(String(b.adxStatus || 'n/a')) + '</span>' +
+              '<span>VOL ' + esc(String(asScore(b.volumeScore))) + ' • vol ' + esc(fmtTiny(b.currentVolume)) + ' • MA20 ' + esc(fmtTiny(b.volumeMA20)) + ' • ' + esc(String(b.volumeStatus || 'n/a')) + '</span>' +
             '</div>' +
           '</details>';
         }).join('');
         return '<div class="trend-meter__head">' +
           '<div class="trend-meter__title">Trend Meter</div>' +
           '<div class="trend-meter__overall">' +
-            '<span class="trend-meter__overall-score">Overall ' + esc(String(overallScore)) + '</span>' +
-            '<span class="' + pillClass(overallLabel) + '">' + esc(overallLabel) + '</span>' +
+            '<span class="trend-meter__overall-score">Overall Score ' + esc(String(overallScore)) + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="trend-meter__rows">' + rowHtml + '</div>';
@@ -1294,6 +1331,58 @@
         '</div>';
       }
 
+      function fibPillClass(label) {
+        var normalized = String(label || '').toLowerCase();
+        if (normalized === 'strong trend') return 'indicator-pill indicator-pill--bullish';
+        if (normalized === 'normal pullback') return 'indicator-pill indicator-pill--pullback';
+        if (normalized === 'deep retracement') return 'indicator-pill indicator-pill--neutral';
+        if (normalized === 'structure failure') return 'indicator-pill indicator-pill--bearish';
+        return 'indicator-pill indicator-pill--neutral';
+      }
+
+      function fibBlock(tf) {
+        var values = tf && tf.values ? tf.values : {};
+        var fib = values.fib || {};
+        if (!fib.available) {
+          return '<div class="indicator-tech indicator-tech--fib">' +
+            '<div class="indicator-tech__head">' +
+              '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">Fibonacci</div></div>' +
+              '<span class="indicator-pill indicator-pill--neutral">Not enough data</span>' +
+            '</div>' +
+            '<div class="indicator-tech__note">' + esc(fib.reason || 'Not enough data') + '</div>' +
+          '</div>';
+        }
+        var levels = fib.levels || {};
+        var status = fib.status || 'Not enough data';
+        var levelsHtml = [
+          { label: '23.6%', key: 'fib236' },
+          { label: '38.2%', key: 'fib382' },
+          { label: '50.0%', key: 'fib500' },
+          { label: '61.8%', key: 'fib618' },
+          { label: '78.6%', key: 'fib786' }
+        ].map(function (entry) {
+          return '<div class="indicator-sr__metric">' +
+            '<span>' + esc(entry.label) + '</span>' +
+            '<strong>' + esc(fmtIndicator(levels[entry.key])) + '</strong>' +
+          '</div>';
+        }).join('');
+        var supportTone = isFinite(Number(fib.nearestFibBelow)) ? ' indicator-sr__metric--support' : '';
+        var resistanceTone = isFinite(Number(fib.nearestFibAbove)) ? ' indicator-sr__metric--resistance' : '';
+        return '<div class="indicator-sr indicator-fib">' +
+          '<div class="indicator-sr__head">' +
+            '<div class="indicator-sr__title">Fibonacci</div>' +
+            '<span class="' + fibPillClass(status) + '">' + esc(status) + '</span>' +
+          '</div>' +
+          '<div class="indicator-sr__pivot-grid indicator-fib__levels">' + levelsHtml + '</div>' +
+          '<div class="indicator-fib__summary">' +
+            '<div class="indicator-sr__metric"><span>Current Price</span><strong>' + esc(fmtIndicator(fib.currentClose)) + '</strong></div>' +
+            '<div class="indicator-sr__metric' + supportTone + '"><span>Nearest Support</span><strong>' + esc(fmtIndicator(fib.nearestFibBelow)) + '</strong></div>' +
+            '<div class="indicator-sr__metric' + resistanceTone + '"><span>Nearest Resistance</span><strong>' + esc(fmtIndicator(fib.nearestFibAbove)) + '</strong></div>' +
+          '</div>' +
+          '<div class="indicator-tech__note indicator-fib__note">Distance to nearest: ' + esc(fmtPctAbsolute(fib.distanceToNearestFibPct)) + '</div>' +
+        '</div>';
+      }
+
       function reversalBlock(tf) {
         var reversal = tf && tf.reversal ? tf.reversal : {};
         var score = asScore(reversal.score);
@@ -1344,6 +1433,55 @@
         '</div>';
       }
 
+      function formatTradeZone(low, high) {
+        var zoneLow = Number(low);
+        var zoneHigh = Number(high);
+        if (!isFinite(zoneLow) || !isFinite(zoneHigh) || zoneLow <= 0 || zoneHigh <= 0 || zoneHigh < zoneLow) return 'No setup';
+        var mid = (zoneLow + zoneHigh) / 2;
+        var widthPct = mid > 0 ? Math.abs(zoneHigh - zoneLow) / mid : Infinity;
+        if (widthPct <= 0.002) return 'around ' + fmtIndicator(mid);
+        return fmtIndicator(zoneLow) + ' - ' + fmtIndicator(zoneHigh);
+      }
+
+      function tradeConfidencePillClass(label) {
+        var normalized = String(label || '').toLowerCase();
+        if (normalized === 'high') return 'indicator-pill indicator-pill--bullish';
+        if (normalized === 'medium') return 'indicator-pill indicator-pill--pullback';
+        return 'indicator-pill indicator-pill--neutral';
+      }
+
+      function tradePlanBlock(tf) {
+        var plan = (tf && tf.tradePlan) || (tf && tf.values && tf.values.tradePlan) || {};
+        var entryType = String(plan.entryType || 'No setup');
+        var confidence = String(plan.confidence || 'Low');
+        var reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
+        var entryZone = formatTradeZone(plan.entryZoneLow, plan.entryZoneHigh);
+        var takeProfitZone = formatTradeZone(plan.takeProfitZoneLow, plan.takeProfitZoneHigh);
+        var failureExitZone = formatTradeZone(plan.failureExitZoneLow, plan.failureExitZoneHigh);
+        if (takeProfitZone === 'No setup') takeProfitZone = 'No clear take-profit zone';
+        if (failureExitZone === 'No setup') failureExitZone = 'No clear failure exit';
+        var planReason = reasons.length ? reasons.slice(0, 3).join(' • ') : String(plan.reason || 'No clean confluence setup');
+        var hasData = !!plan.available || entryType !== 'No setup' || takeProfitZone !== 'No clear take-profit zone' || failureExitZone !== 'No clear failure exit';
+        var confidenceText = hasData ? (confidence + ' (' + String(Number(plan.confidencePoints || 0)) + ')') : 'Low (0)';
+        return '<div class="indicator-tech indicator-tech--tradeplan">' +
+          '<div class="indicator-tech__head">' +
+            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">Trade Plan</div></div>' +
+            '<span class="' + tradeConfidencePillClass(confidence) + '">' + esc(confidence) + '</span>' +
+          '</div>' +
+          '<div class="indicator-tech__metrics indicator-tech__metrics--3">' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Entry</span><strong>' + esc(entryZone) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Take Profit</span><strong>' + esc(takeProfitZone) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Failure Exit</span><strong>' + esc(failureExitZone) + '</strong></div>' +
+          '</div>' +
+          '<div class="indicator-tech__metrics indicator-tech__metrics--2">' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Entry Type</span><strong>' + esc(entryType) + '</strong></div>' +
+            '<div class="indicator-sr__metric indicator-tech__metric"><span>Confidence</span><strong>' + esc(confidenceText) + '</strong></div>' +
+          '</div>' +
+          '<div class="indicator-tech__note indicator-trade-plan__reasons">' + esc(planReason) + '</div>' +
+          '<div class="indicator-tech__note indicator-trade-plan__disclaimer">' + esc(String(plan.note || 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.')) + '</div>' +
+        '</div>';
+      }
+
       if (this.el.indicatorsAssetLabel) {
         this.el.indicatorsAssetLabel.textContent = assetLabel;
       }
@@ -1361,26 +1499,34 @@
         var values = tf.values || {};
         var statuses = tf.statuses || {};
         var trend = trendMeta(tf.overall);
-        var closeValue = Number(tf.close);
-        var ema20Value = Number(values.ema20);
-        var ema50Value = Number(values.ema50);
-        var emaSignal = '▽ Below EMA20';
+        var emaSignal = '↔ Mixed EMA structure';
         var emaSignalClass = 'indicator-tech__note--neutral';
-        if (isFinite(closeValue) && isFinite(ema20Value) && isFinite(ema50Value)) {
-          if (closeValue > ema20Value) {
-            emaSignal = '▲ Strong above EMA20';
-            emaSignalClass = 'indicator-tech__note--up';
-          } else if (closeValue < ema50Value) {
-            emaSignal = '▽ Closed below EMA50';
-            emaSignalClass = 'indicator-tech__note--down';
-          } else {
-            emaSignal = '▽ Below EMA20';
-            emaSignalClass = 'indicator-tech__note--neutral';
-          }
+        if (statuses.ema === 'Bullish') {
+          emaSignal = '▲ Full bullish EMA stack';
+          emaSignalClass = 'indicator-tech__note--up';
+        } else if (statuses.ema === 'Bearish') {
+          emaSignal = '▽ Full bearish EMA stack';
+          emaSignalClass = 'indicator-tech__note--down';
         }
+        var macdSignal = 'Line and histogram not aligned';
+        var macdSignalClass = 'indicator-tech__note--neutral';
+        if (statuses.macd === 'Bullish') {
+          macdSignal = 'Line > Signal and Histogram > 0';
+          macdSignalClass = 'indicator-tech__note--up';
+        } else if (statuses.macd === 'Bearish') {
+          macdSignal = 'Line < Signal and Histogram < 0';
+          macdSignalClass = 'indicator-tech__note--down';
+        }
+        var volumeInfo = values.volumeConfirmation || {};
+        var volumeSignal = String(volumeInfo.status || 'Neutral');
+        var volumeSignalClass = 'indicator-tech__note--neutral';
+        if (volumeSignal === 'Bullish confirmation') volumeSignalClass = 'indicator-tech__note--up';
+        else if (volumeSignal === 'Bearish confirmation') volumeSignalClass = 'indicator-tech__note--down';
+        var adxTrendText = String(values.adxTrend || 'n/a');
         return '<section class="indicator-card">' +
           '<div class="indicator-card__head"><h4>' + esc(String(key).toUpperCase()) + '</h4><span class="' + esc(trend.cls) + '" title="' + esc(trend.label) + '" aria-label="' + esc(trend.label) + '">' + trend.icon + '</span><span class="' + pillClass(tf.overall) + '">' + esc(tf.overall || 'Neutral') + '</span></div>' +
           '<div class="indicator-card__rows">' +
+            srBlock(tf) +
             techBlock('EMA Trend', statuses.ema, [
               { label: 'EMA20', value: fmtIndicator(values.ema20) },
               { label: 'EMA50', value: fmtIndicator(values.ema50) },
@@ -1394,15 +1540,26 @@
               { label: 'Line', value: fmtIndicator(values.macdLine) },
               { label: 'Signal', value: fmtIndicator(values.macdSignal) },
               { label: 'Hist', value: fmtIndicator(values.macdHistogram) }
-            ]) +
+            ], macdSignal, macdSignalClass) +
             techBlock('Bollinger', statuses.bollinger, [
               { label: 'Mid', value: fmtIndicator(values.bbMiddle) },
               { label: 'Upper', value: fmtIndicator(values.bbUpper) },
               { label: 'Lower', value: fmtIndicator(values.bbLower) }
             ], String(values.bollingerPosition || 'n/a')) +
+            techBlock('ADX 14', statuses.adx, [
+              { label: 'ADX', value: fmtIndicator(values.adx14) },
+              { label: '+DI', value: fmtIndicator(values.adxPlusDI) },
+              { label: '-DI', value: fmtIndicator(values.adxMinusDI) }
+            ], adxTrendText) +
+            techBlock('Volume Confirm', statuses.volume, [
+              { label: 'Volume', value: fmtIndicator(values.volumeCurrent) },
+              { label: 'Vol MA20', value: fmtIndicator(values.volumeMA20) },
+              { label: 'Prev Close', value: fmtIndicator(values.prevClose) }
+            ], volumeSignal, volumeSignalClass) +
+            fibBlock(tf) +
             emaPositionBlock(tf) +
-            srBlock(tf) +
             reversalBlock(tf) +
+            tradePlanBlock(tf) +
           '</div>' +
           '<div class="indicator-note">Score: ' + esc(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
         '</section>';

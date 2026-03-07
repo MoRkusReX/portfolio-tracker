@@ -25,6 +25,8 @@
       var close = num(row && row.close);
       var volume = num(row && row.volume);
       if (!time || open == null || high == null || low == null || close == null) return null;
+      if (open <= 0 || high <= 0 || low <= 0 || close <= 0) return null;
+      if (high < low) return null;
       return {
         t: time,
         o: open,
