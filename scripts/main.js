@@ -1128,6 +1128,9 @@
       if (Object.prototype.hasOwnProperty.call(savedSettings, 'cryptoParticlesEnabled')) {
         state.app.cryptoParticlesEnabled = !!savedSettings.cryptoParticlesEnabled;
       }
+      if (Object.prototype.hasOwnProperty.call(savedSettings, 'uiTransparencyEnabled')) {
+        state.app.uiTransparencyEnabled = !!savedSettings.uiTransparencyEnabled;
+      }
       state.app.demoModeEnabled = !!savedSettings.demoModeEnabled;
       state.app.apiDebugEnabled = !!savedSettings.apiDebugEnabled;
       state.app.apiSourcePrefs = apiSourceHelpers && typeof apiSourceHelpers.normalizePrefs === 'function'
@@ -1541,6 +1544,7 @@
       stocksAutoRefreshIntervalSec: Math.max(15, Number(state.app.stocksAutoRefreshIntervalSec || 600) || 600),
       cryptoAutoRefreshIntervalSec: Math.max(15, Number(state.app.cryptoAutoRefreshIntervalSec || 600) || 600),
       cryptoParticlesEnabled: !!state.app.cryptoParticlesEnabled,
+      uiTransparencyEnabled: !!state.app.uiTransparencyEnabled,
       demoModeEnabled: !!state.app.demoModeEnabled,
       apiDebugEnabled: !!state.app.apiDebugEnabled,
       twelveDataEnabled: !!state.app.twelveDataEnabled,
@@ -2237,6 +2241,7 @@
     ui.setStocksAutoRefreshToggle(!!state.app.stocksAutoRefreshEnabled, state.app.mode);
     ui.setCryptoAutoRefreshToggle(!!state.app.cryptoAutoRefreshEnabled, state.app.mode);
     ui.setCryptoParticlesToggle(!!state.app.cryptoParticlesEnabled, state.app.mode);
+    ui.setUiTransparencyToggle(!!state.app.uiTransparencyEnabled);
     ui.setDemoModeToggle(!!state.app.demoModeEnabled);
     ui.setApiDebugToggle(!!state.app.apiDebugEnabled);
     ui.setApiDebugPanelVisible(!!state.app.apiDebugEnabled);
@@ -2746,6 +2751,11 @@
 
   function applyCryptoParticlesToggle() {
     state.app.cryptoParticlesEnabled = !state.app.cryptoParticlesEnabled;
+    renderAll();
+  }
+
+  function applyUiTransparencyToggle() {
+    state.app.uiTransparencyEnabled = !state.app.uiTransparencyEnabled;
     renderAll();
   }
 
@@ -4269,6 +4279,7 @@
     if (ui.el.apiDebugToggle) ui.el.apiDebugToggle.addEventListener('click', applyApiDebugToggle);
     if (ui.el.holdingsPrivacyToggle) ui.el.holdingsPrivacyToggle.addEventListener('click', applyHoldingsPrivacyToggle);
     if (ui.el.cryptoParticlesToggle) ui.el.cryptoParticlesToggle.addEventListener('click', applyCryptoParticlesToggle);
+    if (ui.el.uiTransparencyToggle) ui.el.uiTransparencyToggle.addEventListener('click', applyUiTransparencyToggle);
     ui.el.addAssetBtn.addEventListener('click', function () { openAddModal(null); });
     ui.el.exportBtn.addEventListener('click', function () {
       storage.exportPortfolioFile({

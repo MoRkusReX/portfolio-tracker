@@ -118,7 +118,9 @@
       this.el = {
         themeToggle: qs('themeToggle'),
         layoutToggle: qs('layoutToggle'),
+        appShell: document.querySelector('.app-shell'),
         cryptoParticlesToggle: qs('cryptoParticlesToggle'),
+        uiTransparencyToggle: qs('uiTransparencyToggle'),
         cryptoParticlesCanvas: qs('cryptoParticlesCanvas'),
         demoModeToggle: qs('demoModeToggle'),
         apiSourcesBtn: qs('apiSourcesBtn'),
@@ -425,6 +427,22 @@
         : ('Background particles are disabled for ' + mode);
       if (this.el.cryptoParticlesCanvas) {
         this.el.cryptoParticlesCanvas.classList.toggle('hidden', !enabled);
+      }
+    },
+    setUiTransparencyToggle: function (enabled) {
+      if (!this.el.uiTransparencyToggle) return;
+      this.el.uiTransparencyToggle.classList.toggle('hidden', false);
+      this.el.uiTransparencyToggle.innerHTML = enabled
+        ? '<span aria-hidden="true">●</span> Transparent On'
+        : '<span aria-hidden="true">○</span> Transparent Off';
+      this.el.uiTransparencyToggle.classList.toggle('btn--primary', !!enabled);
+      this.el.uiTransparencyToggle.classList.toggle('btn--ghost', !enabled);
+      this.el.uiTransparencyToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      this.el.uiTransparencyToggle.title = enabled
+        ? 'UI transparency is enabled'
+        : 'UI transparency is disabled';
+      if (this.el.appShell) {
+        this.el.appShell.classList.toggle('app-shell--transparent-ui', !!enabled);
       }
     },
     setTwelveDataToggle: function (enabled) {

@@ -201,6 +201,7 @@
       stocksAutoRefreshIntervalSec: 600,
       cryptoAutoRefreshIntervalSec: 600,
       cryptoParticlesEnabled: true,
+      uiTransparencyEnabled: false,
       demoModeEnabled: false,
       apiDebugEnabled: false,
       twelveDataEnabled: false,
