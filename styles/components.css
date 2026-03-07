@@ -1021,11 +1021,12 @@ html[data-theme="light"] .fundamentals-summary__badge--neutral {
 
 .mode-switch--topbar {
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.05));
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
-  padding: 0.2rem;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.16);
+    linear-gradient(172deg, rgba(255,255,255,0.1), rgba(255,255,255,0.04)),
+    radial-gradient(circle at 12% -46%, rgba(44, 182, 255, 0.15), transparent 64%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.84rem;
+  padding: 0.18rem;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
 }
 
 .mode-switch__btn {
@@ -1044,17 +1045,22 @@ html[data-theme="light"] .fundamentals-summary__badge--neutral {
 }
 
 .mode-switch--topbar .mode-switch__btn {
-  border-radius: 999px;
-  padding: 0.42rem 0.76rem;
+  border-radius: 0.72rem;
+  padding: 0.4rem 0.74rem;
   font-size: 0.84rem;
   letter-spacing: 0.02em;
 }
 
 .topbar__group .btn,
 .topbar__group .file-btn {
-  border-radius: 999px;
-  padding: 0.44rem 0.72rem;
+  border-radius: 0.76rem;
+  padding: 0.42rem 0.7rem;
   font-size: 0.79rem;
+  border-color: rgba(255, 255, 255, 0.14);
+  background:
+    linear-gradient(166deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    radial-gradient(circle at 10% -45%, rgba(44, 182, 255, 0.09), transparent 64%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .topbar__group .btn--icon,
@@ -1063,23 +1069,24 @@ html[data-theme="light"] .fundamentals-summary__badge--neutral {
   min-width: 2.45rem;
   height: 2.45rem;
   padding: 0;
-  border-radius: 0.85rem;
+  border-radius: 0.76rem;
 }
 
 .topbar__group #addAssetBtn {
-  padding: 0.48rem 0.92rem;
+  padding: 0.47rem 0.94rem;
   font-size: 0.83rem;
   letter-spacing: 0.01em;
 }
 
 #connectionModeBadge.status-badge {
-  border-radius: 999px;
+  border-radius: 0.7rem;
   padding: 0.34rem 0.56rem;
   font-size: 0.73rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background:
+    linear-gradient(168deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03));
   color: var(--text);
 }
 
@@ -3222,8 +3229,35 @@ html[data-theme="light"] #detailPanel .news-source-select {
 }
 
 #indicatorExplorerModal .modal__dialog--wide {
+  width: min(1500px, 98vw);
   max-height: min(94vh, 1040px);
   min-height: min(74vh, 780px);
+}
+
+.indicator-explorer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.52fr) minmax(380px, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.indicator-explorer-main,
+.indicator-explorer-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.indicator-explorer-side .panel-block--fundamentals,
+.indicator-explorer-side .panel-block--news {
+  margin: 0;
+}
+
+@media (max-width: 1220px) {
+  .indicator-explorer-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 .modal__header {

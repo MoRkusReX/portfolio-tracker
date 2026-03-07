@@ -81,6 +81,7 @@
             </span>
           </label>
           <input id="importInput" type="file" accept="application/json" hidden />
+          <button id="indicatorExplorerBtn" class="btn btn--ghost btn--tiny" type="button">Explore</button>
           <button id="addAssetBtn" class="btn btn--primary" type="button">+ Add Asset</button>
         </div>
       </div>
@@ -207,7 +208,6 @@
             <h3>Indicators</h3>
             <div id="indicatorsAssetLabel" class="muted">No asset selected</div>
           </div>
-          <button id="indicatorExplorerBtn" class="btn btn--ghost btn--tiny" type="button">Explore</button>
         </div>
         <section class="panel-block panel-block--indicators">
           <div class="panel-block__head">
@@ -465,31 +465,58 @@
           <input id="indicatorExplorerSearchInput" type="text" autocomplete="off" placeholder="Search TSLA or Solana" />
           <div id="indicatorExplorerSearchList" class="autocomplete__list hidden"></div>
         </div>
-        <section class="panel-block">
-          <div class="panel-block__head">
-            <div>
-              <h4 id="indicatorExplorerChartTitle">Price Chart</h4>
-              <div id="indicatorExplorerChartMeta" class="muted">Search for an asset to load its chart.</div>
-            </div>
+        <div class="indicator-explorer-layout">
+          <div class="indicator-explorer-main">
+            <section class="panel-block">
+              <div class="panel-block__head">
+                <div>
+                  <h4 id="indicatorExplorerChartTitle">Price Chart</h4>
+                  <div id="indicatorExplorerChartMeta" class="muted">Search for an asset to load its chart.</div>
+                </div>
+              </div>
+              <div id="indicatorExplorerChartTimeframes" class="chart-timeframes chart-timeframes--explorer" role="group" aria-label="Explorer chart timeframe"></div>
+              <div class="chart-wrap chart-wrap--line">
+                <canvas id="indicatorExplorerChart" aria-label="Indicator explorer price chart"></canvas>
+                <div id="indicatorExplorerChartFallback" class="chart-fallback hidden">Chart unavailable.</div>
+              </div>
+            </section>
+            <section class="panel-block panel-block--indicators">
+              <div class="panel-block__head">
+                <div>
+                  <h4 id="indicatorExplorerAssetLabel">No asset selected</h4>
+                  <div id="indicatorExplorerModeLabel" class="muted">Stocks</div>
+                </div>
+                <span id="indicatorExplorerOverallPill" class="indicator-pill indicator-pill--neutral">Neutral</span>
+              </div>
+              <div id="indicatorExplorerMeta" class="muted indicator-meta">Search for an asset to load its indicator snapshots.</div>
+              <div id="indicatorExplorerTrendMeter" class="trend-meter"></div>
+            </section>
+            <div id="indicatorExplorerTimeframes" class="indicators-timeframes"></div>
           </div>
-          <div id="indicatorExplorerChartTimeframes" class="chart-timeframes chart-timeframes--explorer" role="group" aria-label="Explorer chart timeframe"></div>
-          <div class="chart-wrap chart-wrap--line">
-            <canvas id="indicatorExplorerChart" aria-label="Indicator explorer price chart"></canvas>
-            <div id="indicatorExplorerChartFallback" class="chart-fallback hidden">Chart unavailable.</div>
+          <div class="indicator-explorer-side">
+            <section class="panel-block panel-block--fundamentals">
+              <div class="panel-block__head">
+                <div>
+                  <h4 id="indicatorExplorerFundamentalsTitle">Fundamentals</h4>
+                  <div id="indicatorExplorerFundamentalsAssetLabel" class="muted">No asset selected</div>
+                </div>
+                <span id="indicatorExplorerFundamentalsOverallPill" class="indicator-pill indicator-pill--neutral">n/a</span>
+              </div>
+              <div id="indicatorExplorerFundamentalsMeta" class="muted indicator-meta">Search for an asset to load fundamentals.</div>
+              <div id="indicatorExplorerFundamentalsSummary" class="fundamentals-summary"></div>
+              <div id="indicatorExplorerFundamentalsGrid" class="fundamentals-grid"></div>
+              <div id="indicatorExplorerFundamentalsReasons" class="fundamentals-reasons"></div>
+            </section>
+            <section class="panel-block panel-block--news">
+              <div class="panel-block__head">
+                <h4>News Feed</h4>
+                <button id="indicatorExplorerNewsRefreshBtn" class="btn btn--tiny btn--ghost" type="button">Refresh</button>
+              </div>
+              <div id="indicatorExplorerNewsMeta" class="muted indicator-meta">Search for an asset to load news.</div>
+              <div id="indicatorExplorerNewsList" class="news-list"></div>
+            </section>
           </div>
-        </section>
-        <section class="panel-block panel-block--indicators">
-          <div class="panel-block__head">
-            <div>
-              <h4 id="indicatorExplorerAssetLabel">No asset selected</h4>
-              <div id="indicatorExplorerModeLabel" class="muted">Stocks</div>
-            </div>
-            <span id="indicatorExplorerOverallPill" class="indicator-pill indicator-pill--neutral">Neutral</span>
-          </div>
-          <div id="indicatorExplorerMeta" class="muted indicator-meta">Search for an asset to load its indicator snapshots.</div>
-          <div id="indicatorExplorerTrendMeter" class="trend-meter"></div>
-        </section>
-        <div id="indicatorExplorerTimeframes" class="indicators-timeframes"></div>
+        </div>
       </div>
     </div>
   </div>

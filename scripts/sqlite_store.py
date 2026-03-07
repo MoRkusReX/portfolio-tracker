@@ -309,14 +309,38 @@ def prune_stale_state_prefix(conn, prefix, max_age_ms):
     if not safe_prefix:
         fail("Missing state prefix")
     cutoff = utc_now_ms() - max(0, int(max_age_ms))
-    cur = conn.execute(
-        """
+    payload = read_stdin_json({})
+    exclude_keys = []
+    exclude_like = []
+    if isinstance(payload, dict):
+        raw_keys = payload.get("excludeKeys")
+        if isinstance(raw_keys, list):
+            for key in raw_keys:
+                safe_key = str(key or "").strip()
+                if safe_key:
+                    exclude_keys.append(safe_key)
+        raw_like = payload.get("excludeLikePatterns")
+        if isinstance(raw_like, list):
+            for pattern in raw_like:
+                safe_pattern = str(pattern or "").strip()
+                if safe_pattern:
+                    exclude_like.append(safe_pattern)
+
+    sql = """
         DELETE FROM app_state
         WHERE state_key LIKE ?
           AND updated_at < ?
-        """,
-        (safe_prefix + "%", cutoff),
-    )
+    """
+    params = [safe_prefix + "%", cutoff]
+    if exclude_keys:
+        placeholders = ",".join("?" for _ in exclude_keys)
+        sql += f"\n          AND state_key NOT IN ({placeholders})"
+        params.extend(exclude_keys)
+    if exclude_like:
+        sql += "".join(["\n          AND state_key NOT LIKE ?" for _ in exclude_like])
+        params.extend(exclude_like)
+
+    cur = conn.execute(sql, params)
     conn.commit()
     return {"ok": True, "deleted": int(cur.rowcount or 0)}
 

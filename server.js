@@ -79,9 +79,11 @@ const INDICATOR_POLICY = {
   '1month': { warmup: 120, incremental: 5, maxCandles: 160, bucket: 'month' }
 };
 const INDICATOR_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
-const NEWS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 7;
+const NEWS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
+const FUNDAMENTALS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
 const NEWS_CACHE_PRUNE_MIN_INTERVAL_MS = 1000 * 60 * 5;
 let newsCachePruneState = { lastRunAt: 0, running: null };
+let fundamentalsCachePruneState = { lastRunAt: 0, running: null };
 
 app.use(cors({ origin: true, methods: ['GET', 'PUT', 'OPTIONS'] }));
 app.use(express.json({ limit: '1mb' }));
@@ -608,12 +610,77 @@ function dbChartStateKey(rawKey) {
   return `chart:${key}`;
 }
 
+// Builds protected DB cache keys/patterns for assets currently pinned in the portfolio.
+function portfolioCacheProtection(portfolio) {
+  const normalized = normalizePortfolioShape(portfolio) || { stocks: [], crypto: [] };
+  const fundamentalsKeys = [];
+  const newsLikePatterns = [];
+  const seenFundamentals = new Set();
+  const seenNewsLike = new Set();
+
+  function pushFundamentalsKey(key) {
+    const safe = String(key || '').trim();
+    if (!safe || seenFundamentals.has(safe)) return;
+    seenFundamentals.add(safe);
+    fundamentalsKeys.push(safe);
+  }
+
+  function pushNewsLike(pattern) {
+    const safe = String(pattern || '').trim();
+    if (!safe || seenNewsLike.has(safe)) return;
+    seenNewsLike.add(safe);
+    newsLikePatterns.push(safe);
+  }
+
+  (Array.isArray(normalized.stocks) ? normalized.stocks : []).forEach((asset) => {
+    const symbol = String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
+    if (!symbol) return;
+    pushFundamentalsKey(`fundamentals:stock:${symbol}`);
+    pushNewsLike(`news:%:stock:${symbol}`);
+  });
+
+  (Array.isArray(normalized.crypto) ? normalized.crypto : []).forEach((asset) => {
+    const coinId = String(asset && (asset.coinId || asset.id) || '').trim().toLowerCase();
+    const symbol = String(asset && asset.symbol || '').trim().toUpperCase();
+    if (coinId) {
+      pushFundamentalsKey(`fundamentals:crypto:${coinId}`);
+      pushNewsLike(`news:%:crypto:${coinId}`);
+    }
+    if (symbol) {
+      pushNewsLike(`news:%:crypto:${symbol}`);
+    }
+  });
+
+  return {
+    fundamentalsKeys,
+    newsLikePatterns
+  };
+}
+
+// Loads the current portfolio and maps it into protected state-key filters.
+async function loadPortfolioCacheProtection() {
+  try {
+    const stored = await runDb('get_state', ['portfolio']);
+    return portfolioCacheProtection(stored && stored.payload);
+  } catch (err) {
+    return {
+      fundamentalsKeys: [],
+      newsLikePatterns: []
+    };
+  }
+}
+
 // Removes stale news snapshots from SQLite no more than once per interval window.
 async function pruneStaleNewsCache() {
   const now = Date.now();
   if (newsCachePruneState.running) return newsCachePruneState.running;
   if (now - Number(newsCachePruneState.lastRunAt || 0) < NEWS_CACHE_PRUNE_MIN_INTERVAL_MS) return null;
-  newsCachePruneState.running = runDb('prune_stale_state_prefix', ['news:', String(NEWS_CACHE_RETENTION_MS)])
+  newsCachePruneState.running = loadPortfolioCacheProtection()
+    .then((protection) => runDb(
+      'prune_stale_state_prefix',
+      ['news:', String(NEWS_CACHE_RETENTION_MS)],
+      { excludeLikePatterns: protection && protection.newsLikePatterns ? protection.newsLikePatterns : [] }
+    ))
     .then(() => {
       newsCachePruneState.lastRunAt = Date.now();
     })
@@ -625,6 +692,30 @@ async function pruneStaleNewsCache() {
       newsCachePruneState.running = null;
     });
   return newsCachePruneState.running;
+}
+
+// Removes stale fundamentals snapshots older than retention unless the asset is in the portfolio.
+async function pruneStaleFundamentalsCache() {
+  const now = Date.now();
+  if (fundamentalsCachePruneState.running) return fundamentalsCachePruneState.running;
+  if (now - Number(fundamentalsCachePruneState.lastRunAt || 0) < NEWS_CACHE_PRUNE_MIN_INTERVAL_MS) return null;
+  fundamentalsCachePruneState.running = loadPortfolioCacheProtection()
+    .then((protection) => runDb(
+      'prune_stale_state_prefix',
+      ['fundamentals:', String(FUNDAMENTALS_CACHE_RETENTION_MS)],
+      { excludeKeys: protection && protection.fundamentalsKeys ? protection.fundamentalsKeys : [] }
+    ))
+    .then(() => {
+      fundamentalsCachePruneState.lastRunAt = Date.now();
+    })
+    .catch((err) => {
+      console.warn('Failed to prune stale fundamentals cache:', err && err.message ? err.message : err);
+      fundamentalsCachePruneState.lastRunAt = Date.now();
+    })
+    .finally(() => {
+      fundamentalsCachePruneState.running = null;
+    });
+  return fundamentalsCachePruneState.running;
 }
 
 // Reads the latest persisted news payload for a given cache key.
@@ -842,6 +933,7 @@ app.put('/api/chart-cache', async (req, res) => {
 // Reads stock/crypto fundamentals from DB cache or upstream providers based on freshness policy.
 app.get('/api/fundamentals', async (req, res) => {
   try {
+    await pruneStaleFundamentalsCache();
     const assetType = String(req.query.assetType || '').trim().toLowerCase() === 'crypto' ? 'crypto' : 'stock';
     const symbol = String(req.query.symbol || '').trim().toUpperCase();
     const coinId = String(req.query.coinId || '').trim().toLowerCase();
