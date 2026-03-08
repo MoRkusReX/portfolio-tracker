@@ -212,6 +212,11 @@
         portfolioSelect: qs('portfolioSelect'),
         portfolioDeleteBtn: qs('portfolioDeleteBtn'),
         sortSelect: qs('sortSelect'),
+        allocationModeToggle: qs('allocationModeToggle'),
+        allocationModeStocksBtn: qs('allocationModeStocksBtn'),
+        allocationModeSectorsBtn: qs('allocationModeSectorsBtn'),
+        allocationPanel: qs('allocationPanel'),
+        openAllocationPanelBtn: qs('openAllocationPanelBtn'),
         statusBadge: qs('statusBadge'),
         connectionModeBadge: qs('connectionModeBadge'),
         totalValue: qs('totalValue'),
@@ -220,6 +225,7 @@
         holdingsCount: qs('holdingsCount'),
         holdingsPanel: qs('holdingsPanel'),
         holdingsSortSelect: qs('holdingsSortSelect'),
+        holdingsSortSelectMobile: qs('holdingsSortSelectMobile'),
         holdingsRefreshBtn: qs('holdingsRefreshBtn'),
         openHoldingsPanelBtn: qs('openHoldingsPanelBtn'),
         portfolioList: qs('portfolioList'),
@@ -286,6 +292,20 @@
         portfolioNameForm: qs('portfolioNameForm'),
         portfolioNameInput: qs('portfolioNameInput'),
         portfolioNameModeLabel: qs('portfolioNameModeLabel'),
+        sectorEditModal: qs('sectorEditModal'),
+        sectorEditModalCloseBtn: qs('sectorEditModalCloseBtn'),
+        sectorEditCancelBtn: qs('sectorEditCancelBtn'),
+        sectorEditForm: qs('sectorEditForm'),
+        sectorEditSymbolLabel: qs('sectorEditSymbolLabel'),
+        sectorEditSelect: qs('sectorEditSelect'),
+        sectorEditNewWrap: qs('sectorEditNewWrap'),
+        sectorEditNewInput: qs('sectorEditNewInput'),
+        sectorResetModal: qs('sectorResetModal'),
+        sectorResetModalCloseBtn: qs('sectorResetModalCloseBtn'),
+        sectorResetCancelBtn: qs('sectorResetCancelBtn'),
+        sectorResetConfirmBtn: qs('sectorResetConfirmBtn'),
+        sectorResetModalSubtitle: qs('sectorResetModalSubtitle'),
+        sectorResetModalMessage: qs('sectorResetModalMessage'),
         apiSourcesModal: qs('apiSourcesModal'),
         apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
         apiSourcesContent: qs('apiSourcesContent'),
@@ -307,14 +327,19 @@
         indicatorExplorerViewAllBtn: qs('indicatorExplorerViewAllBtn'),
         indicatorExplorerViewFavoritesBtn: qs('indicatorExplorerViewFavoritesBtn'),
         indicatorExplorerSearchWrap: qs('indicatorExplorerSearchWrap'),
+        indicatorExplorerSummaryBar: qs('indicatorExplorerSummaryBar'),
+        indicatorExplorerSummaryAsset: qs('indicatorExplorerSummaryAsset'),
+        indicatorExplorerSummaryPriceBadge: qs('indicatorExplorerSummaryPriceBadge'),
         indicatorExplorerFavoritesPage: qs('indicatorExplorerFavoritesPage'),
         indicatorExplorerFavoritesCount: qs('indicatorExplorerFavoritesCount'),
+        indicatorExplorerFavoritesRefreshBtn: qs('indicatorExplorerFavoritesRefreshBtn'),
         indicatorExplorerLayout: qs('indicatorExplorerLayout'),
         indicatorExplorerSearchInput: qs('indicatorExplorerSearchInput'),
         indicatorExplorerSearchList: qs('indicatorExplorerSearchList'),
         indicatorExplorerFavoritesList: qs('indicatorExplorerFavoritesList'),
         indicatorExplorerChartTitle: qs('indicatorExplorerChartTitle'),
         indicatorExplorerChartMeta: qs('indicatorExplorerChartMeta'),
+        indicatorExplorerChartTradingViewBtn: qs('indicatorExplorerChartTradingViewBtn'),
         indicatorExplorerChartTimeframes: qs('indicatorExplorerChartTimeframes'),
         indicatorExplorerChart: qs('indicatorExplorerChart'),
         indicatorExplorerChartFallback: qs('indicatorExplorerChartFallback'),
@@ -335,6 +360,13 @@
         indicatorExplorerNewsRefreshBtn: qs('indicatorExplorerNewsRefreshBtn'),
         indicatorExplorerNewsMeta: qs('indicatorExplorerNewsMeta'),
         indicatorExplorerNewsList: qs('indicatorExplorerNewsList'),
+        indicatorExplorerNoteModal: qs('indicatorExplorerNoteModal'),
+        indicatorExplorerNoteModalCloseBtn: qs('indicatorExplorerNoteModalCloseBtn'),
+        indicatorExplorerNoteForm: qs('indicatorExplorerNoteForm'),
+        indicatorExplorerNoteAssetLabel: qs('indicatorExplorerNoteAssetLabel'),
+        indicatorExplorerNoteInput: qs('indicatorExplorerNoteInput'),
+        indicatorExplorerNoteCount: qs('indicatorExplorerNoteCount'),
+        indicatorExplorerNoteCancelBtn: qs('indicatorExplorerNoteCancelBtn'),
         panelViewerModal: qs('panelViewerModal'),
         panelViewerCloseBtn: qs('panelViewerCloseBtn'),
         panelViewerTitle: qs('panelViewerTitle'),
@@ -634,6 +666,19 @@
       var safe = value || 'az';
       if (this.el.sortSelect) this.el.sortSelect.value = safe;
       if (this.el.holdingsSortSelect) this.el.holdingsSortSelect.value = safe;
+      if (this.el.holdingsSortSelectMobile) this.el.holdingsSortSelectMobile.value = safe;
+    },
+    setAllocationModeToggle: function (mode, visible) {
+      if (!this.el.allocationModeToggle || !this.el.allocationModeStocksBtn || !this.el.allocationModeSectorsBtn) return;
+      var safeMode = mode === 'sectors' ? 'sectors' : 'stocks';
+      var show = visible !== false;
+      this.el.allocationModeToggle.classList.toggle('hidden', !show);
+      if (!show) return;
+      var stocksActive = safeMode !== 'sectors';
+      this.el.allocationModeStocksBtn.classList.toggle('is-active', stocksActive);
+      this.el.allocationModeSectorsBtn.classList.toggle('is-active', !stocksActive);
+      this.el.allocationModeStocksBtn.setAttribute('aria-pressed', stocksActive ? 'true' : 'false');
+      this.el.allocationModeSectorsBtn.setAttribute('aria-pressed', stocksActive ? 'false' : 'true');
     },
     setNewsScopeToggle: function (mode, scope, hasSelectedStock, selectedStockLabel) {
       if (!this.el.newsScopeToggle || !this.el.newsScopeGeneralBtn || !this.el.newsScopeSelectedBtn) return;
@@ -851,12 +896,21 @@
     renderAllocationLegend: function (items, colors, hideHoldings, options) {
       var scrambleEnabled = !!(options && options.scrambleHoldings);
       var scrambleSeed = String(options && options.scrambleSeed || '0');
+      var sectorMode = !!(options && options.sectorMode);
       var total = items.reduce(function (acc, item) { return acc + (Number(item.marketValue) || 0); }, 0);
       var html = items.map(function (item, i) {
         var pct = total > 0 ? (item.marketValue / total) * 100 : 0;
         var symbolText = item.symbol;
         var pctTextDisplay = pct.toFixed(1);
         var valueDisplay = Number(item.marketValue);
+        var chartIndex = isFinite(Number(item._allocationIndex)) ? Number(item._allocationIndex) : i;
+        var groupLabel = sectorMode ? '' : String(item._allocationGroupLabel || '').trim();
+        var industryLabel = String(item._allocationIndustryLabel || '').trim();
+        var rowSymbol = String(item._allocationSymbol || item.symbol || '').trim().toUpperCase();
+        var editable = !!(sectorMode && item && item._allocationEditable && rowSymbol);
+        var ariaLabel = sectorMode
+          ? ('Highlight ' + (item._allocationGroup || groupLabel || 'sector') + ' sector in chart')
+          : ('Highlight ' + item.symbol + ' in chart');
         if (scrambleEnabled && item.type === 'stock') {
           var legendKey = item.key || item.id || item.symbol;
           symbolText = scrambleTicker(item.symbol, legendKey, scrambleSeed);
@@ -864,10 +918,16 @@
           pctTextDisplay = Math.max(0.1, Math.min(99.9, fakePct)).toFixed(1);
           valueDisplay = scrambleAmountValue(valueDisplay, legendKey, scrambleSeed, 'alloc-amt', { forcePositive: true });
         }
-        return '<div class="legend-item" data-allocation-index="' + i + '" tabindex="0" role="button" aria-label="Highlight ' + esc(item.symbol) + ' in chart">' +
-          '<span class="legend-item__dot" style="background:' + colors[i % colors.length] + '"></span>' +
+        return '' +
+          (groupLabel ? '<div class="allocation-legend__group">' + esc(groupLabel) + '</div>' : '') +
+          (industryLabel ? '<div class="allocation-legend__subgroup">' + esc(industryLabel) + '</div>' : '') +
+          '<div class="legend-item' + (editable ? ' legend-item--editable' : '') + '" data-allocation-index="' + chartIndex + '" tabindex="0" role="button" aria-label="' + esc(ariaLabel) + '">' +
+          '<span class="legend-item__dot" style="background:' + colors[chartIndex % colors.length] + '"></span>' +
           '<span>' + esc(symbolText) + ' • ' + pctTextDisplay + '%</span>' +
           '<strong>' + (hideHoldings ? 'Hidden' : fmtCurrency(valueDisplay)) + '</strong>' +
+          (editable
+            ? ('<button class="legend-item__edit" type="button" data-edit-sector-symbol="' + esc(rowSymbol) + '" aria-label="Edit sector for ' + esc(rowSymbol) + '" title="Edit sector">Edit sector</button>')
+            : '') +
           '</div>';
       }).join('');
       this.el.allocationLegend.innerHTML = html || '<div class="muted">No allocation data</div>';

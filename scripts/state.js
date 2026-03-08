@@ -219,6 +219,7 @@
       newsScopeStocks: 'general',
       newsSourceStocks: 'marketaux',
       newsSourceCrypto: 'auto',
+      allocationModeStocks: 'stocks',
       detailChartTimeframeStocks: '1M',
       detailChartTimeframeCrypto: '1M',
       explorerChartTimeframeStocks: '1M',

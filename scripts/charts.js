@@ -18,10 +18,10 @@
   }
 
   // Builds a deterministic signature so allocation chart updates only when data truly changes.
-  function allocationSignature(labels, values) {
+  function allocationSignature(labels, values, mode) {
     var safeLabels = Array.isArray(labels) ? labels : [];
     var safeValues = Array.isArray(values) ? values : [];
-    var parts = [];
+    var parts = [String(mode || 'stocks')];
     for (var i = 0; i < Math.max(safeLabels.length, safeValues.length); i++) {
       var label = String(safeLabels[i] || '');
       var value = Number(safeValues[i]);
@@ -37,7 +37,7 @@
     line: null,
     lineCharts: {},
     dominance: null,
-    renderAllocation: function (canvas, fallbackEl, labels, values) {
+    renderAllocation: function (canvas, fallbackEl, labels, values, options) {
       if (!chartAvailable() || !canvas) {
         destroy(this.pie);
         this.pie = null;
@@ -45,10 +45,12 @@
         if (fallbackEl) fallbackEl.classList.remove('hidden');
         return;
       }
+      var opts = options && typeof options === 'object' ? options : {};
+      var mode = String(opts.mode || 'stocks').trim().toLowerCase() === 'sectors' ? 'sectors' : 'stocks';
       if (fallbackEl) fallbackEl.classList.add('hidden');
       var safeLabels = Array.isArray(labels) ? labels.slice() : [];
       var safeValues = Array.isArray(values) ? values.slice() : [];
-      var signature = allocationSignature(safeLabels, safeValues);
+      var signature = allocationSignature(safeLabels, safeValues, mode);
       var colors = palette(safeValues.length);
       var hasReusable = !!(this.pie && this.pie.canvas === canvas);
 
@@ -70,10 +72,28 @@
             maintainAspectRatio: false,
             cutout: '62%',
             animation: false,
-            plugins: { legend: { display: false } }
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: function (context) {
+                    var label = String(context && context.label || '').trim() || 'Allocation';
+                    var value = Number(context && context.parsed || 0) || 0;
+                    var dataset = context && context.dataset && Array.isArray(context.dataset.data) ? context.dataset.data : [];
+                    var total = 0;
+                    for (var i = 0; i < dataset.length; i++) total += Number(dataset[i] || 0) || 0;
+                    var pct = total > 0 ? (value / total) * 100 : 0;
+                    var viewMode = context && context.chart && context.chart.$ptAllocationMode === 'sectors' ? 'sectors' : 'stocks';
+                    if (viewMode === 'sectors') return label + ': ' + pct.toFixed(1) + '% of portfolio';
+                    return label + ': ' + value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                  }
+                }
+              }
+            }
           }
         });
         this.pieSignature = signature;
+        this.pie.$ptAllocationMode = mode;
         return;
       }
 
@@ -88,6 +108,7 @@
         this.pie.data.datasets[0].borderWidth = 0;
         this.pie.data.datasets[0].hoverOffset = 10;
       }
+      this.pie.$ptAllocationMode = mode;
       this.pie.update('none');
       this.pieSignature = signature;
     },

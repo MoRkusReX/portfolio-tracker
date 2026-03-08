@@ -385,6 +385,7 @@ html[data-layout="wide"] .portfolio-grid {
 
   #detailPanel > #linksSocialsBlock {
     grid-column: 2;
+    align-self: stretch;
   }
 }
 
@@ -437,6 +438,13 @@ html[data-layout="wide"] .portfolio-grid {
 
   html[data-layout="wide"] #linksSocialsBlock {
     grid-column: 2;
+    align-self: stretch;
+  }
+
+  html[data-layout="wide"] #linksSocialsBlock #usefulLinksList.news-list {
+    max-height: none;
+    min-height: 0;
+    overflow: auto;
   }
 
 }
@@ -599,9 +607,14 @@ html[data-layout="wide"] .portfolio-grid {
   }
 
   .brand {
-    align-items: flex-start;
-    justify-content: space-between;
-    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 0.56rem;
+  }
+
+  .brand > div {
+    min-width: 0;
   }
 
   .topbar__actions {

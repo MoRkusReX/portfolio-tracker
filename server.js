@@ -81,6 +81,7 @@ const INDICATOR_POLICY = {
 const INDICATOR_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
 const NEWS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
 const FUNDAMENTALS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
+const SECTOR_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 90;
 const NEWS_CACHE_PRUNE_MIN_INTERVAL_MS = 1000 * 60 * 5;
 let newsCachePruneState = { lastRunAt: 0, running: null };
 let fundamentalsCachePruneState = { lastRunAt: 0, running: null };
@@ -184,26 +185,44 @@ function normalizePortfolioShape(raw) {
 }
 
 // Accepts wrapped or raw explorer favorites shape and normalizes/deduplicates it.
+const EXPLORER_FAVORITE_NOTE_MAX_LEN = 280;
+
+// Normalizes and bounds an explorer favorite note to tweet length.
+function normalizeExplorerFavoriteNote(raw) {
+  const text = String(raw == null ? '' : raw).replace(/\r\n/g, '\n').trim();
+  if (!text) return '';
+  return text.slice(0, EXPLORER_FAVORITE_NOTE_MAX_LEN);
+}
+
+// Accepts wrapped or raw explorer favorites shape and normalizes/deduplicates it.
 function normalizeExplorerFavoritesShape(raw) {
   const candidate = raw && raw.favorites && typeof raw.favorites === 'object' ? raw.favorites : raw;
   const stocks = Array.isArray(candidate && candidate.stocks) ? candidate.stocks : [];
   const crypto = Array.isArray(candidate && candidate.crypto) ? candidate.crypto : [];
-  const seen = new Set();
+  const seenStocks = new Map();
+  const seenCrypto = new Map();
   const out = { stocks: [], crypto: [] };
 
   stocks.forEach((item) => {
     const symbol = String(item && (item.yahooSymbol || item.symbol) || '').trim().toUpperCase();
     if (!symbol) return;
     const key = `stock:${symbol}`;
-    if (seen.has(key)) return;
-    seen.add(key);
+    const note = normalizeExplorerFavoriteNote(item && item.note);
+    if (seenStocks.has(key)) {
+      const idx = seenStocks.get(key);
+      const existing = out.stocks[idx];
+      if (existing && !existing.note && note) existing.note = note;
+      return;
+    }
+    seenStocks.set(key, out.stocks.length);
     out.stocks.push({
       assetType: 'stock',
       symbol,
       yahooSymbol: symbol,
       stooqSymbol: String(item && item.stooqSymbol || item && item.stooq || '').trim() || null,
       market: String(item && item.market || 'US').trim() || 'US',
-      name: String(item && item.name || symbol).trim() || symbol
+      name: String(item && item.name || symbol).trim() || symbol,
+      note
     });
   });
 
@@ -213,13 +232,20 @@ function normalizeExplorerFavoritesShape(raw) {
     if (!symbol && !coinId) return;
     const normalizedSymbol = symbol || coinId.toUpperCase();
     const key = `crypto:${normalizedSymbol}`;
-    if (seen.has(key)) return;
-    seen.add(key);
+    const note = normalizeExplorerFavoriteNote(item && item.note);
+    if (seenCrypto.has(key)) {
+      const idx = seenCrypto.get(key);
+      const existing = out.crypto[idx];
+      if (existing && !existing.note && note) existing.note = note;
+      return;
+    }
+    seenCrypto.set(key, out.crypto.length);
     out.crypto.push({
       assetType: 'crypto',
       symbol: normalizedSymbol,
       coinId: coinId || null,
-      name: String(item && item.name || normalizedSymbol).trim() || normalizedSymbol
+      name: String(item && item.name || normalizedSymbol).trim() || normalizedSymbol,
+      note
     });
   });
 
@@ -736,6 +762,13 @@ function dbChartStateKey(rawKey) {
   return `chart:${key}`;
 }
 
+// Builds a stable SQLite key for per-symbol stock sector metadata.
+function dbSectorStateKey(rawSymbol) {
+  const symbol = String(rawSymbol || '').trim().toUpperCase();
+  if (!symbol) return '';
+  return `sector:stock:${symbol}`;
+}
+
 // Builds protected DB cache keys/patterns for assets currently pinned in the portfolio.
 function portfolioCacheProtection(portfolio, favorites) {
   const normalized = normalizePortfolioShape(portfolio) || { stocks: [], crypto: [] };
@@ -1097,6 +1130,351 @@ app.put('/api/chart-cache', async (req, res) => {
     return res.status(500).json({
       error: 'chart_cache_write_failed',
       detail: String(err && err.message || 'Failed to save chart cache').slice(0, 240)
+    });
+  }
+});
+
+// Reads the latest persisted sector metadata payload for one stock symbol.
+app.get('/api/sector-cache', async (req, res) => {
+  try {
+    await runDb('prune_stale_state_prefix', ['sector:stock:', String(SECTOR_CACHE_RETENTION_MS)]);
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    const stateKey = dbSectorStateKey(symbol);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    const stored = await runDb('get_state', [stateKey]);
+    const payload = stored && stored.payload && typeof stored.payload === 'object' ? stored.payload : null;
+    return res.json({
+      found: !!(stored && stored.found && payload),
+      symbol,
+      metadata: payload,
+      updatedAt: Number(stored && stored.updatedAt || 0) || 0
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'sector_cache_read_failed',
+      detail: String(err && err.message || 'Failed to load sector cache').slice(0, 240)
+    });
+  }
+});
+
+// Persists sector metadata payload for one stock symbol.
+app.put('/api/sector-cache', async (req, res) => {
+  try {
+    await runDb('prune_stale_state_prefix', ['sector:stock:', String(SECTOR_CACHE_RETENTION_MS)]);
+    const symbol = String(req.body && req.body.symbol || '').trim().toUpperCase();
+    const stateKey = dbSectorStateKey(symbol);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    const metadata = req.body && req.body.metadata && typeof req.body.metadata === 'object'
+      ? req.body.metadata
+      : null;
+    if (!metadata) {
+      return res.status(400).json({ error: 'invalid_metadata' });
+    }
+    const result = await runDb('set_state', [stateKey], metadata);
+    return res.json({
+      ok: true,
+      symbol,
+      updatedAt: Number(result && result.updatedAt || 0) || Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'sector_cache_write_failed',
+      detail: String(err && err.message || 'Failed to save sector cache').slice(0, 240)
+    });
+  }
+});
+
+// Proxies Finnhub profile data used for stock sector/industry classification.
+app.get('/api/stock-sector/finnhub', async (req, res) => {
+  try {
+    if (!FINNHUB_API_KEY) {
+      return res.status(500).json({ error: 'finnhub_key_missing' });
+    }
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    if (!symbol) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(FINNHUB_API_KEY)}`;
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
+      validateStatus: () => true
+    });
+    if (response.status !== 200) {
+      const detail = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      return res.status(response.status === 429 ? 429 : 500).json({
+        error: response.status === 429 ? 'finnhub_rate_limited' : 'finnhub_failed',
+        detail: String(detail || 'Finnhub profile request failed').slice(0, 240)
+      });
+    }
+    const payload = response.data && typeof response.data === 'object' ? response.data : {};
+    return res.json({
+      symbol,
+      source: 'finnhub',
+      fetchedAt: Date.now(),
+      profile: {
+        name: String(payload.name || '').trim() || null,
+        type: String(payload.type || '').trim() || null,
+        ticker: String(payload.ticker || '').trim() || null,
+        exchange: String(payload.exchange || '').trim() || null,
+        finnhubIndustry: String(payload.finnhubIndustry || '').trim() || null,
+        industry: String(payload.industry || '').trim() || null,
+        sector: String(payload.sector || '').trim() || null
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'finnhub_failed',
+      detail: String(err && err.message || 'Finnhub profile proxy failed').slice(0, 240)
+    });
+  }
+});
+
+// Proxies Alpha Vantage company overview data used as sector fallback.
+app.get('/api/stock-sector/alphavantage', async (req, res) => {
+  try {
+    if (!ALPHAVANTAGE_API_KEY) {
+      return res.status(500).json({ error: 'alphavantage_key_missing' });
+    }
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    if (!symbol) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    const params = new URLSearchParams();
+    params.set('function', 'OVERVIEW');
+    params.set('symbol', symbol);
+    params.set('apikey', ALPHAVANTAGE_API_KEY);
+    const url = `https://www.alphavantage.co/query?${params.toString()}`;
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json,text/plain,*/*' },
+      validateStatus: () => true
+    });
+    if (response.status !== 200) {
+      const detail = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      return res.status(response.status === 429 ? 429 : 500).json({
+        error: response.status === 429 ? 'alphavantage_rate_limited' : 'alphavantage_failed',
+        detail: String(detail || 'Alpha Vantage overview request failed').slice(0, 240)
+      });
+    }
+    const payload = response.data && typeof response.data === 'object' ? response.data : {};
+    if (payload['Error Message']) {
+      return res.status(400).json({
+        error: 'alphavantage_failed',
+        detail: String(payload['Error Message']).slice(0, 240)
+      });
+    }
+    if (payload.Note || payload.Information) {
+      return res.status(429).json({
+        error: 'alphavantage_rate_limited',
+        detail: String(payload.Note || payload.Information).slice(0, 240)
+      });
+    }
+    return res.json({
+      symbol,
+      source: 'alpha-vantage',
+      fetchedAt: Date.now(),
+      overview: {
+        Name: String(payload.Name || '').trim() || null,
+        Description: String(payload.Description || '').trim() || null,
+        AssetType: String(payload.AssetType || '').trim() || null,
+        Category: String(payload.Category || '').trim() || null,
+        Sector: String(payload.Sector || '').trim() || null,
+        Industry: String(payload.Industry || '').trim() || null,
+        Exchange: String(payload.Exchange || '').trim() || null
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'alphavantage_failed',
+      detail: String(err && err.message || 'Alpha Vantage overview proxy failed').slice(0, 240)
+    });
+  }
+});
+
+// Proxies Alpha Vantage listing status metadata used for stock vs ETF/fund detection.
+app.get('/api/stock-sector/asset-type', async (req, res) => {
+  try {
+    if (!ALPHAVANTAGE_API_KEY) {
+      return res.status(500).json({ error: 'alphavantage_key_missing' });
+    }
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    if (!symbol) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    const params = new URLSearchParams();
+    params.set('function', 'LISTING_STATUS');
+    params.set('symbol', symbol);
+    params.set('apikey', ALPHAVANTAGE_API_KEY);
+    const url = `https://www.alphavantage.co/query?${params.toString()}`;
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'text/csv,application/json,text/plain,*/*' },
+      responseType: 'text',
+      transformResponse: [(data) => data],
+      validateStatus: () => true
+    });
+    if (response.status !== 200) {
+      const detail = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+      return res.status(response.status === 429 ? 429 : 500).json({
+        error: response.status === 429 ? 'alphavantage_rate_limited' : 'alphavantage_failed',
+        detail: String(detail || 'Alpha Vantage listing status request failed').slice(0, 240)
+      });
+    }
+    const body = String(response.data || '').trim();
+    if (!body) {
+      return res.json({
+        symbol,
+        source: 'alpha-vantage-listing',
+        fetchedAt: Date.now(),
+        found: false,
+        assetType: null,
+        name: null,
+        exchange: null
+      });
+    }
+    if (/Thank you for using Alpha Vantage/i.test(body) || /call frequency/i.test(body)) {
+      return res.status(429).json({
+        error: 'alphavantage_rate_limited',
+        detail: body.slice(0, 240)
+      });
+    }
+    if (body.charAt(0) === '{') {
+      let payload = {};
+      try {
+        payload = JSON.parse(body);
+      } catch (e) {
+        payload = {};
+      }
+      if (payload.Note || payload.Information) {
+        return res.status(429).json({
+          error: 'alphavantage_rate_limited',
+          detail: String(payload.Note || payload.Information).slice(0, 240)
+        });
+      }
+      if (payload['Error Message']) {
+        return res.status(400).json({
+          error: 'alphavantage_failed',
+          detail: String(payload['Error Message']).slice(0, 240)
+        });
+      }
+    }
+
+    function splitCsvLine(line) {
+      const out = [];
+      let token = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            token += '"';
+            i += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (ch === ',' && !inQuotes) {
+          out.push(token);
+          token = '';
+        } else {
+          token += ch;
+        }
+      }
+      out.push(token);
+      return out.map((x) => String(x || '').trim());
+    }
+
+    const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      return res.json({
+        symbol,
+        source: 'alpha-vantage-listing',
+        fetchedAt: Date.now(),
+        found: false,
+        assetType: null,
+        name: null,
+        exchange: null
+      });
+    }
+    const headers = splitCsvLine(lines[0]).map((x) => x.toLowerCase());
+    let matchRow = null;
+    for (let i = 1; i < lines.length; i++) {
+      const values = splitCsvLine(lines[i]);
+      const row = {};
+      for (let j = 0; j < headers.length; j++) row[headers[j]] = values[j] || '';
+      if (String(row.symbol || '').trim().toUpperCase() === symbol) {
+        matchRow = row;
+        break;
+      }
+    }
+    return res.json({
+      symbol,
+      source: 'alpha-vantage-listing',
+      fetchedAt: Date.now(),
+      found: !!matchRow,
+      assetType: matchRow ? (String(matchRow.assettype || '').trim() || null) : null,
+      name: matchRow ? (String(matchRow.name || '').trim() || null) : null,
+      exchange: matchRow ? (String(matchRow.exchange || '').trim() || null) : null
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'alphavantage_failed',
+      detail: String(err && err.message || 'Alpha Vantage listing status proxy failed').slice(0, 240)
+    });
+  }
+});
+
+// Reads cached fundamentals profile hints to improve sector classification fallback quality.
+app.get('/api/stock-sector/fundamentals-cache', async (req, res) => {
+  try {
+    const symbol = String(req.query.symbol || '').trim().toUpperCase();
+    if (!symbol) {
+      return res.status(400).json({ error: 'missing_symbol' });
+    }
+    const stateKey = `fundamentals:stock:${symbol}`;
+    const stored = await runDb('get_state', [stateKey]);
+    const payload = stored && stored.payload && typeof stored.payload === 'object' ? stored.payload : null;
+    const profile = payload &&
+      payload.components &&
+      payload.components.profile &&
+      payload.components.profile.data &&
+      typeof payload.components.profile.data === 'object'
+      ? payload.components.profile.data
+      : null;
+    if (!profile) {
+      return res.json({
+        symbol,
+        source: 'fundamentals-cache',
+        found: false,
+        fetchedAt: 0,
+        profile: null
+      });
+    }
+    const isEtf = !!profile.isEtf || !!profile.isFund;
+    const typeText = isEtf ? 'ETF' : String(payload.assetType || '').trim() || null;
+    return res.json({
+      symbol,
+      source: 'fundamentals-cache',
+      found: true,
+      fetchedAt: Math.max(0, Number(payload.fetchedAt || 0) || Number(stored && stored.updatedAt || 0) || 0),
+      profile: {
+        name: String(profile.companyName || profile.name || '').trim() || null,
+        description: String(profile.description || '').trim() || null,
+        sector: String(profile.sector || '').trim() || null,
+        industry: String(profile.industry || '').trim() || null,
+        category: String(profile.category || '').trim() || null,
+        exchange: String(profile.exchange || profile.exchangeFullName || '').trim() || null,
+        type: typeText
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'fundamentals_cache_read_failed',
+      detail: String(err && err.message || 'Failed to read fundamentals cache').slice(0, 240)
     });
   }
 });

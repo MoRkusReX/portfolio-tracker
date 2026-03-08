@@ -318,6 +318,85 @@
         return { ok: false };
       });
     },
+    // Reads a server-persisted stock sector metadata record by symbol.
+    getRemoteStockSector: function (symbol) {
+      var safeSymbol = String(symbol || '').trim().toUpperCase();
+      if (!safeSymbol) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/sector-cache?symbol=' + encodeURIComponent(safeSymbol), {
+        cache: 'no-store'
+      }).then(function (payload) {
+        if (!payload || !payload.found) return null;
+        return {
+          symbol: safeSymbol,
+          metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : null,
+          updatedAt: Math.max(0, Number(payload.updatedAt || 0) || 0)
+        };
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Writes a server-persisted stock sector metadata record by symbol.
+    saveRemoteStockSector: function (symbol, metadata) {
+      var safeSymbol = String(symbol || '').trim().toUpperCase();
+      if (!safeSymbol || !metadata || typeof metadata !== 'object') return Promise.resolve({ ok: false });
+      return fetch(apiBase() + '/api/sector-cache', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: safeSymbol,
+          metadata: metadata
+        })
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          return {
+            ok: !!response.ok,
+            updatedAt: Math.max(0, Number(payload && payload.updatedAt || 0) || 0)
+          };
+        });
+      }).catch(function () {
+        return { ok: false, updatedAt: 0 };
+      });
+    },
+    // Fetches stock sector/profile metadata from Finnhub through the local proxy.
+    fetchSectorFromFinnhub: function (symbol) {
+      var safeSymbol = String(symbol || '').trim().toUpperCase();
+      if (!safeSymbol) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/stock-sector/finnhub?symbol=' + encodeURIComponent(safeSymbol), {
+        cache: 'no-store'
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Fetches stock sector/profile metadata from Alpha Vantage through the local proxy.
+    fetchSectorFromAlphaVantage: function (symbol) {
+      var safeSymbol = String(symbol || '').trim().toUpperCase();
+      if (!safeSymbol) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/stock-sector/alphavantage?symbol=' + encodeURIComponent(safeSymbol), {
+        cache: 'no-store'
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Fetches Alpha Vantage listing-status metadata used to distinguish stock vs ETF/fund.
+    fetchSectorAssetTypeFromAlphaVantage: function (symbol) {
+      var safeSymbol = String(symbol || '').trim().toUpperCase();
+      if (!safeSymbol) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/stock-sector/asset-type?symbol=' + encodeURIComponent(safeSymbol), {
+        cache: 'no-store'
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Reads cached fundamentals profile hints used as a no-API sector classification fallback.
+    fetchSectorFromFundamentalsCache: function (symbol) {
+      var safeSymbol = String(symbol || '').trim().toUpperCase();
+      if (!safeSymbol) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/stock-sector/fundamentals-cache?symbol=' + encodeURIComponent(safeSymbol), {
+        cache: 'no-store'
+      }).catch(function () {
+        return null;
+      });
+    },
     // Exports a provided payload as a downloadable JSON file.
     exportPortfolioFile: function (payload) {
       var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });

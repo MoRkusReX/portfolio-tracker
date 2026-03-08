@@ -106,6 +106,7 @@
         </div>
       </div>
     </header>
+    <div id="mobileRowStickyHost" class="mobile-row-sticky-host hidden" aria-hidden="true"></div>
 
     <main class="layout">
       <section class="main-panel">
@@ -159,6 +160,27 @@
               </div>
               <div class="holdings-header-actions">
                 <span id="holdingsCount" class="muted">0 assets</span>
+                <details class="holdings-sort-menu-mobile">
+                  <summary class="btn btn--ghost btn--tiny btn--icon" aria-label="Open sort options" title="Sort holdings">
+                    <span class="btn__icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" focusable="false"><path d="M7 5v13m0 0-2.5-2.5M7 18l2.5-2.5M17 19V6m0 0-2.5 2.5M17 6l2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                  </summary>
+                  <div class="holdings-sort-menu-mobile__pop">
+                    <label for="holdingsSortSelectMobile">Sort</label>
+                    <select id="holdingsSortSelectMobile">
+                      <option value="az">A-Z</option>
+                      <option value="value-desc">Value (High-Low)</option>
+                      <option value="value-asc">Value (Low-High)</option>
+                      <option value="pl-desc">P/L (High-Low)</option>
+                      <option value="pl-asc">P/L (Low-High)</option>
+                      <option value="daily-pl-desc">Daily P/L (High-Low)</option>
+                      <option value="daily-pl-asc">Daily P/L (Low-High)</option>
+                      <option value="day-desc">Day Change (High-Low)</option>
+                      <option value="day-asc">Day Change (Low-High)</option>
+                    </select>
+                  </div>
+                </details>
                 <button id="holdingsRefreshBtn" class="btn btn--primary btn--tiny btn--icon panel-expand-btn holdings-refresh-btn" type="button" aria-label="Refresh prices" title="Refresh prices">
                   <span class="btn__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15.9 7.1h3.4v3.4M19.3 10.5A7.3 7.3 0 0 0 8 6.3M8.1 16.9H4.7v-3.4M4.7 13.5A7.3 7.3 0 0 0 16 17.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -174,10 +196,20 @@
             <div id="portfolioList" class="asset-list" aria-live="polite"></div>
           </div>
 
-          <div class="pie-panel glass">
+          <div id="allocationPanel" class="pie-panel glass">
             <div class="section-header">
               <h3>Allocation</h3>
-              <span class="muted">Pie chart</span>
+              <div class="holdings-header-actions">
+                <div id="allocationModeToggle" class="allocation-mode-toggle" role="group" aria-label="Allocation chart mode">
+                  <button id="allocationModeStocksBtn" class="btn btn--tiny btn--ghost is-active" type="button" aria-pressed="true">Stocks</button>
+                  <button id="allocationModeSectorsBtn" class="btn btn--tiny btn--ghost" type="button" aria-pressed="false">Sectors</button>
+                </div>
+                <button id="openAllocationPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open allocation in large view" title="Open large view">
+                  <span class="btn__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                </button>
+              </div>
             </div>
             <div class="chart-wrap chart-wrap--pie">
               <canvas id="allocationChart" aria-label="Allocation pie chart"></canvas>
@@ -484,6 +516,55 @@
     </div>
   </div>
 
+  <div id="sectorEditModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-sector-edit-modal="1"></div>
+    <div class="modal__dialog modal__dialog--sector-editor glass" role="dialog" aria-modal="true" aria-labelledby="sectorEditModalTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="sectorEditModalTitle">Edit Sub-sector</h3>
+          <div id="sectorEditSymbolLabel" class="muted portfolio-name-modal__subtitle">Selected stock</div>
+        </div>
+        <button id="sectorEditModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="sectorEditForm" class="modal__form">
+        <div class="field-group">
+          <label for="sectorEditSelect">Sub-sector</label>
+          <select id="sectorEditSelect"></select>
+        </div>
+        <div id="sectorEditNewWrap" class="field-group hidden">
+          <label for="sectorEditNewInput">New sub-sector name</label>
+          <input id="sectorEditNewInput" type="text" maxlength="64" placeholder="Type a custom sub-sector name" />
+        </div>
+        <div class="modal__actions">
+          <button type="button" id="sectorEditCancelBtn" class="btn btn--ghost">Cancel</button>
+          <button type="submit" class="btn btn--primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="sectorResetModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-sector-reset-modal="1"></div>
+    <div class="modal__dialog modal__dialog--sector-reset glass" role="dialog" aria-modal="true" aria-labelledby="sectorResetModalTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="sectorResetModalTitle">Reset Custom Sub-sectors</h3>
+          <div id="sectorResetModalSubtitle" class="muted portfolio-name-modal__subtitle">Restore algorithm classification for selected stocks</div>
+        </div>
+        <button id="sectorResetModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="sector-reset-modal__body">
+        <p id="sectorResetModalMessage" class="muted">
+          This will remove manual sub-sector overrides and reapply classifier results.
+        </p>
+      </div>
+      <div class="modal__actions sector-reset-modal__actions">
+        <button type="button" id="sectorResetCancelBtn" class="btn btn--ghost">Cancel</button>
+        <button type="button" id="sectorResetConfirmBtn" class="btn btn--primary">Reset</button>
+      </div>
+    </div>
+  </div>
+
   <div id="apiSourcesModal" class="modal hidden" aria-hidden="true">
     <div class="modal__backdrop" data-close-api-sources-modal="1" onclick="var m=document.getElementById('apiSourcesModal');if(m){m.classList.add('hidden');m.setAttribute('aria-hidden','true');}"></div>
     <div class="modal__dialog modal__dialog--wide glass" role="dialog" aria-modal="true" aria-labelledby="apiSourcesTitle">
@@ -532,48 +613,57 @@
           <div id="indicatorExplorerSearchList" class="autocomplete__list hidden"></div>
         </div>
         <section id="indicatorExplorerFavoritesPage" class="panel-block indicator-explorer-favorites-page hidden">
-          <div class="panel-block__head">
-            <div>
-              <h4>Favorites</h4>
-              <div class="muted">Watchlist-style favorites for quick open in Explore.</div>
-            </div>
-            <span id="indicatorExplorerFavoritesCount" class="muted">0 favorites</span>
-          </div>
+          <span id="indicatorExplorerFavoritesCount" class="hidden" aria-hidden="true">0 favorites</span>
           <div class="indicator-explorer-favorites__table">
             <div class="indicator-explorer-favorites__head">
-              <span>Asset</span>
-              <span>TA</span>
-              <span>Quality</span>
-              <span>Price</span>
-              <span>Day</span>
-              <span>Action</span>
+              <button class="indicator-explorer-favorites__sort" type="button" data-explorer-favorites-sort="asset" aria-label="Sort favorites by asset">
+                <span>Asset</span>
+                <span class="indicator-explorer-favorites__sort-icon" data-explorer-favorites-sort-icon="asset">↕</span>
+              </button>
+              <button class="indicator-explorer-favorites__sort" type="button" data-explorer-favorites-sort="ta" aria-label="Sort favorites by TA status">
+                <span>TA</span>
+                <span class="indicator-explorer-favorites__sort-icon" data-explorer-favorites-sort-icon="ta">↕</span>
+              </button>
+              <button class="indicator-explorer-favorites__sort" type="button" data-explorer-favorites-sort="quality" aria-label="Sort favorites by quality status">
+                <span>Quality</span>
+                <span class="indicator-explorer-favorites__sort-icon" data-explorer-favorites-sort-icon="quality">↕</span>
+              </button>
+              <button class="indicator-explorer-favorites__sort" type="button" data-explorer-favorites-sort="price" aria-label="Sort favorites by price">
+                <span>Price</span>
+                <span class="indicator-explorer-favorites__sort-icon" data-explorer-favorites-sort-icon="price">↕</span>
+              </button>
+              <button class="indicator-explorer-favorites__sort" type="button" data-explorer-favorites-sort="day" aria-label="Sort favorites by day change">
+                <span>Day</span>
+                <span class="indicator-explorer-favorites__sort-icon" data-explorer-favorites-sort-icon="day">↕</span>
+              </button>
+              <span class="indicator-explorer-favorites__head-actions">
+                <button id="indicatorExplorerFavoritesRefreshBtn" class="btn btn--ghost btn--tiny btn--icon indicator-explorer-favorites__refresh" type="button" aria-label="Refresh favorites quotes" title="Refresh favorites quotes">
+                  <span class="btn__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15.9 7.1h3.4v3.4M19.3 10.5A7.3 7.3 0 0 0 8 6.3M8.1 16.9H4.7v-3.4M4.7 13.5A7.3 7.3 0 0 0 16 17.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                </button>
+                <span>Actions</span>
+              </span>
             </div>
             <div id="indicatorExplorerFavoritesList" class="indicator-explorer-favorites"></div>
           </div>
         </section>
+        <section id="indicatorExplorerSummaryBar" class="panel-block indicator-explorer-summary hidden">
+          <div class="indicator-explorer-summary__left">
+            <div id="indicatorExplorerSummaryAsset" class="indicator-explorer-summary__asset">No asset selected</div>
+            <div id="indicatorExplorerSummaryPriceBadge" class="detail-price-badge hidden" aria-live="polite"></div>
+          </div>
+          <div class="indicator-explorer-summary__right">
+            <button id="indicatorExplorerFavoriteBtn" class="btn btn--ghost btn--tiny" type="button" title="Add to favorites" aria-label="Add to favorites" aria-pressed="false">☆ Favorite</button>
+          </div>
+        </section>
         <div id="indicatorExplorerLayout" class="indicator-explorer-layout">
           <div class="indicator-explorer-main">
-            <section class="panel-block">
-              <div class="panel-block__head">
-                <div>
-                  <h4 id="indicatorExplorerChartTitle">Price Chart</h4>
-                  <div id="indicatorExplorerChartMeta" class="muted">Search for an asset to load its chart.</div>
-                </div>
-                <div class="indicator-explorer-head-actions">
-                  <button id="indicatorExplorerFavoriteBtn" class="btn btn--ghost btn--tiny" type="button" title="Add to favorites" aria-label="Add to favorites" aria-pressed="false">☆ Favorite</button>
-                </div>
-              </div>
-              <div id="indicatorExplorerChartTimeframes" class="chart-timeframes chart-timeframes--explorer" role="group" aria-label="Explorer chart timeframe"></div>
-              <div class="chart-wrap chart-wrap--line">
-                <canvas id="indicatorExplorerChart" aria-label="Indicator explorer price chart"></canvas>
-                <div id="indicatorExplorerChartFallback" class="chart-fallback hidden">Chart unavailable.</div>
-              </div>
-            </section>
             <section class="panel-block panel-block--indicators">
               <div class="panel-block__head">
                 <div>
-                  <h4 id="indicatorExplorerAssetLabel">No asset selected</h4>
-                  <div id="indicatorExplorerModeLabel" class="muted">Stocks</div>
+                  <h4>Indicators</h4>
+                  <div id="indicatorExplorerAssetLabel" class="muted">No asset selected</div>
                 </div>
                 <div class="indicator-explorer-head-actions">
                   <span id="indicatorExplorerOverallPill" class="indicator-pill indicator-pill--neutral">Neutral</span>
@@ -598,6 +688,24 @@
               <div id="indicatorExplorerFundamentalsGrid" class="fundamentals-grid"></div>
               <div id="indicatorExplorerFundamentalsReasons" class="fundamentals-reasons"></div>
             </section>
+            <section class="panel-block">
+              <div class="panel-block__head">
+                <div>
+                  <div class="indicator-explorer-chart-headline">
+                    <h4 id="indicatorExplorerChartTitle">Price Chart</h4>
+                  </div>
+                  <div id="indicatorExplorerChartMeta" class="muted">Search for an asset to load its chart.</div>
+                </div>
+                <div class="indicator-explorer-head-actions">
+                  <a id="indicatorExplorerChartTradingViewBtn" class="btn btn--ghost btn--tiny" href="#" target="_blank" rel="noopener noreferrer" aria-label="Open TradingView chart">Open TradingView</a>
+                </div>
+              </div>
+              <div id="indicatorExplorerChartTimeframes" class="chart-timeframes chart-timeframes--explorer" role="group" aria-label="Explorer chart timeframe"></div>
+              <div class="chart-wrap chart-wrap--line">
+                <canvas id="indicatorExplorerChart" aria-label="Indicator explorer price chart"></canvas>
+                <div id="indicatorExplorerChartFallback" class="chart-fallback hidden">Chart unavailable.</div>
+              </div>
+            </section>
             <section class="panel-block panel-block--news">
               <div class="panel-block__head">
                 <h4>News Feed</h4>
@@ -609,6 +717,33 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="indicatorExplorerNoteModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-indicator-explorer-note="1"></div>
+    <div class="modal__dialog modal__dialog--explorer-note glass" role="dialog" aria-modal="true" aria-labelledby="indicatorExplorerNoteTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="indicatorExplorerNoteTitle">Favorite Note</h3>
+          <div id="indicatorExplorerNoteAssetLabel" class="muted">Selected favorite</div>
+        </div>
+        <button id="indicatorExplorerNoteModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="indicatorExplorerNoteForm" class="modal__form">
+        <div class="field-group">
+          <label for="indicatorExplorerNoteInput">Note</label>
+          <textarea id="indicatorExplorerNoteInput" maxlength="280" rows="5" placeholder="Add a short note (max 280 characters)."></textarea>
+          <div class="indicator-explorer-note__meta muted">
+            <span>Saved to DB with favorites</span>
+            <span id="indicatorExplorerNoteCount">0/280</span>
+          </div>
+        </div>
+        <div class="modal__actions">
+          <button type="button" id="indicatorExplorerNoteCancelBtn" class="btn btn--ghost">Cancel</button>
+          <button type="submit" class="btn btn--primary">Save Note</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -677,6 +812,7 @@
   <script src="scripts/api/stocktwits.js"></script>
   <script src="scripts/api/events.js"></script>
   <script src="scripts/api/fundamentals.js"></script>
+  <script src="scripts/sector-allocation.js"></script>
   <script src="scripts/indicator-engine.js"></script>
   <script src="scripts/api/indicators.js"></script>
   <script src="scripts/particles.js"></script>
