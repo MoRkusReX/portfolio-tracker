@@ -318,6 +318,45 @@
         return { ok: false };
       });
     },
+    // Reads a server-persisted risk meter snapshot by key.
+    getRemoteRiskCache: function (key) {
+      var safeKey = String(key || '').trim();
+      if (!safeKey) return Promise.resolve(null);
+      return fetchJson(apiBase() + '/api/risk-cache?key=' + encodeURIComponent(safeKey), {
+        cache: 'no-store'
+      }).then(function (payload) {
+        if (!payload || !payload.found) return null;
+        return {
+          key: safeKey,
+          snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : null,
+          updatedAt: Math.max(0, Number(payload.updatedAt || 0) || 0)
+        };
+      }).catch(function () {
+        return null;
+      });
+    },
+    // Writes a server-persisted risk meter snapshot by key.
+    saveRemoteRiskCache: function (key, snapshot) {
+      var safeKey = String(key || '').trim();
+      if (!safeKey || !snapshot || typeof snapshot !== 'object') return Promise.resolve({ ok: false });
+      return fetch(apiBase() + '/api/risk-cache', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: safeKey,
+          snapshot: snapshot
+        })
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (json) {
+          return {
+            ok: !!response.ok,
+            updatedAt: Math.max(0, Number(json && json.updatedAt || 0) || 0)
+          };
+        });
+      }).catch(function () {
+        return { ok: false, updatedAt: 0 };
+      });
+    },
     // Reads a server-persisted stock sector metadata record by symbol.
     getRemoteStockSector: function (symbol) {
       var safeSymbol = String(symbol || '').trim().toUpperCase();

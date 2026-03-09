@@ -83,8 +83,10 @@ const NEWS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
 const FUNDAMENTALS_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
 const SECTOR_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 90;
 const NEWS_CACHE_PRUNE_MIN_INTERVAL_MS = 1000 * 60 * 5;
+const LINK_PREVIEW_CHECK_TTL_MS = 1000 * 60 * 10;
 let newsCachePruneState = { lastRunAt: 0, running: null };
 let fundamentalsCachePruneState = { lastRunAt: 0, running: null };
+const linkPreviewCheckCache = new Map();
 
 app.use(cors({ origin: true, methods: ['GET', 'PUT', 'OPTIONS'] }));
 app.use(express.json({ limit: '1mb' }));
@@ -762,6 +764,13 @@ function dbChartStateKey(rawKey) {
   return `chart:${key}`;
 }
 
+// Builds a stable SQLite key for per-asset risk meter snapshots.
+function dbRiskStateKey(rawKey) {
+  const key = String(rawKey || '').trim();
+  if (!key) return '';
+  return `risk:${key}`;
+}
+
 // Builds a stable SQLite key for per-symbol stock sector metadata.
 function dbSectorStateKey(rawSymbol) {
   const symbol = String(rawSymbol || '').trim().toUpperCase();
@@ -1130,6 +1139,61 @@ app.put('/api/chart-cache', async (req, res) => {
     return res.status(500).json({
       error: 'chart_cache_write_failed',
       detail: String(err && err.message || 'Failed to save chart cache').slice(0, 240)
+    });
+  }
+});
+
+// Reads the latest persisted risk-meter snapshot for a given asset key.
+app.get('/api/risk-cache', async (req, res) => {
+  try {
+    const key = String(req.query.key || '').trim();
+    const stateKey = dbRiskStateKey(key);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_key' });
+    }
+    const stored = await runDb('get_state', [stateKey]);
+    const payload = stored && stored.payload && typeof stored.payload === 'object' ? stored.payload : {};
+    return res.json({
+      found: !!(stored && stored.found),
+      key,
+      snapshot: payload,
+      updatedAt: Number(stored && stored.updatedAt || 0) || 0
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'risk_cache_read_failed',
+      detail: String(err && err.message || 'Failed to load risk cache').slice(0, 240)
+    });
+  }
+});
+
+// Persists a risk-meter snapshot for a given asset key.
+app.put('/api/risk-cache', async (req, res) => {
+  try {
+    const key = String(req.body && req.body.key || '').trim();
+    const stateKey = dbRiskStateKey(key);
+    if (!stateKey) {
+      return res.status(400).json({ error: 'missing_key' });
+    }
+    const snapshot = req.body && req.body.snapshot && typeof req.body.snapshot === 'object'
+      ? req.body.snapshot
+      : null;
+    if (!snapshot) {
+      return res.status(400).json({ error: 'invalid_snapshot' });
+    }
+    const payload = Object.assign({}, snapshot, {
+      updatedAt: Math.max(0, Number(snapshot.updatedAt || 0) || Date.now())
+    });
+    const result = await runDb('set_state', [stateKey], payload);
+    return res.json({
+      ok: true,
+      key,
+      updatedAt: Number(result && result.updatedAt || 0) || Date.now()
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'risk_cache_write_failed',
+      detail: String(err && err.message || 'Failed to save risk cache').slice(0, 240)
     });
   }
 });
@@ -1814,6 +1878,223 @@ app.get('/api/stocktwits/:symbol', async (req, res) => {
       error: 'stocktwits_failed',
       status: 500,
       detail: (err && err.message ? err.message : 'Stocktwits proxy failed').slice(0, 200)
+    });
+  }
+});
+
+// Normalizes a URL-like string into a protocol+host origin token.
+function normalizeOrigin(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  try {
+    const parsed = new URL(text);
+    return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+  } catch (err) {
+    return '';
+  }
+}
+
+// Extracts the CSP frame-ancestors directive tokens, if present.
+function parseFrameAncestors(cspRaw) {
+  const csp = String(cspRaw || '').trim();
+  if (!csp) return null;
+  const directives = csp.split(';').map((item) => String(item || '').trim()).filter(Boolean);
+  for (const directive of directives) {
+    if (!/^frame-ancestors\b/i.test(directive)) continue;
+    const tokens = directive
+      .replace(/^frame-ancestors\b/i, '')
+      .trim()
+      .split(/\s+/)
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    return tokens.length ? tokens : [];
+  }
+  return null;
+}
+
+// Checks whether a CSP source expression allows the requesting origin.
+function cspSourceAllowsOrigin(sourceExpr, appOrigin, targetOrigin) {
+  const expr = String(sourceExpr || '').trim();
+  if (!expr || !appOrigin) return false;
+  const lower = expr.toLowerCase();
+  if (lower === "'none'") return false;
+  if (lower === '*') return true;
+  if (lower === "'self'") return !!targetOrigin && appOrigin === targetOrigin;
+  if (/^[a-z][a-z0-9+.-]*:$/i.test(lower)) {
+    return appOrigin.startsWith(`${lower}//`);
+  }
+  let app;
+  try {
+    app = new URL(appOrigin);
+  } catch (err) {
+    return false;
+  }
+
+  const hostPortMatch = (candidateHostPort) => {
+    const value = String(candidateHostPort || '').trim().toLowerCase();
+    if (!value) return false;
+    const parts = value.split(':');
+    const host = parts[0] || '';
+    const port = parts.length > 1 ? parts[parts.length - 1] : '';
+    if (host.startsWith('*.')) {
+      const suffix = host.slice(2);
+      if (!suffix || app.hostname.toLowerCase() === suffix) return false;
+      if (!app.hostname.toLowerCase().endsWith(`.${suffix}`)) return false;
+    } else if (host && app.hostname.toLowerCase() !== host) {
+      return false;
+    }
+    if (!port) return true;
+    const appPort = app.port || (app.protocol === 'https:' ? '443' : (app.protocol === 'http:' ? '80' : ''));
+    return appPort === port;
+  };
+
+  const wildcardWithScheme = lower.match(/^([a-z][a-z0-9+.-]*):\/\/\*\.(.+)$/i);
+  if (wildcardWithScheme) {
+    const scheme = wildcardWithScheme[1].toLowerCase();
+    const suffix = wildcardWithScheme[2].toLowerCase();
+    return app.protocol === `${scheme}:` &&
+      app.hostname.toLowerCase() !== suffix &&
+      app.hostname.toLowerCase().endsWith(`.${suffix}`);
+  }
+
+  if (/^[*]\./.test(lower)) {
+    return hostPortMatch(lower);
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(lower)) {
+    try {
+      const allowed = new URL(lower);
+      if (app.protocol !== allowed.protocol) return false;
+      if (app.hostname.toLowerCase() !== allowed.hostname.toLowerCase()) return false;
+      if (!allowed.port) return true;
+      const appPort = app.port || (app.protocol === 'https:' ? '443' : (app.protocol === 'http:' ? '80' : ''));
+      return appPort === allowed.port;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  return hostPortMatch(lower);
+}
+
+// Evaluates XFO/CSP headers to determine whether iframe embedding should work.
+function evaluateLinkEmbeddable(headers, appOrigin, targetOrigin) {
+  const xfo = String(headers && headers['x-frame-options'] || '').trim();
+  const xfoLower = xfo.toLowerCase();
+  if (xfoLower.includes('deny')) {
+    return { embeddable: false, reason: 'Blocked by X-Frame-Options: DENY' };
+  }
+  if (xfoLower.includes('sameorigin') && appOrigin && targetOrigin && appOrigin !== targetOrigin) {
+    return { embeddable: false, reason: 'Blocked by X-Frame-Options: SAMEORIGIN' };
+  }
+  if (xfoLower.includes('allow-from')) {
+    const match = xfo.match(/allow-from\s+([^\s]+)/i);
+    const allowOrigin = normalizeOrigin(match && match[1] ? match[1] : '');
+    if (!allowOrigin || (appOrigin && allowOrigin !== appOrigin)) {
+      return { embeddable: false, reason: 'Blocked by X-Frame-Options allow-from policy' };
+    }
+  }
+
+  const cspRaw = String(
+    headers && (
+      headers['content-security-policy'] ||
+      headers['content-security-policy-report-only'] ||
+      headers['x-content-security-policy'] ||
+      ''
+    )
+  ).trim();
+  const frameAncestors = parseFrameAncestors(cspRaw);
+  if (Array.isArray(frameAncestors)) {
+    if (!frameAncestors.length || frameAncestors.some((token) => String(token || '').toLowerCase() === "'none'")) {
+      return { embeddable: false, reason: 'Blocked by CSP frame-ancestors' };
+    }
+    const allowsOrigin = frameAncestors.some((token) => cspSourceAllowsOrigin(token, appOrigin, targetOrigin));
+    if (!allowsOrigin) {
+      return { embeddable: false, reason: 'Blocked by CSP frame-ancestors' };
+    }
+  }
+
+  return { embeddable: true, reason: '' };
+}
+
+// Checks whether a target link is likely embeddable in an iframe for the current app origin.
+app.get('/api/link-preview/check', async (req, res) => {
+  const target = String(req.query.url || '').trim();
+  const appOrigin = normalizeOrigin(req.query.origin || '');
+  if (!target) {
+    return res.status(400).json({ ok: false, embeddable: false, reason: 'Missing url parameter' });
+  }
+
+  let parsedTarget;
+  try {
+    parsedTarget = new URL(target);
+  } catch (err) {
+    return res.status(400).json({ ok: false, embeddable: false, reason: 'Invalid URL' });
+  }
+  if (!/^https?:$/i.test(parsedTarget.protocol)) {
+    return res.status(400).json({ ok: false, embeddable: false, reason: 'Only HTTP/HTTPS URLs are supported' });
+  }
+
+  const cacheKey = `${parsedTarget.toString()}|${appOrigin}`;
+  const cached = linkPreviewCheckCache.get(cacheKey);
+  if (cached && Number(cached.expiresAt || 0) > Date.now()) {
+    return res.json(Object.assign({ ok: true, cached: true }, cached.payload));
+  }
+
+  try {
+    const response = await http.get(parsedTarget.toString(), {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      maxRedirects: 5,
+      validateStatus: () => true
+    });
+    const finalUrl = String(
+      (response && response.request && response.request.res && response.request.res.responseUrl) ||
+      parsedTarget.toString()
+    );
+    const targetOrigin = normalizeOrigin(finalUrl) || normalizeOrigin(parsedTarget.toString());
+    const headers = response && response.headers ? response.headers : {};
+    const contentType = String(headers['content-type'] || '').toLowerCase();
+    if (response.status >= 400) {
+      const payload = {
+        embeddable: false,
+        reason: `Upstream responded with ${response.status}`,
+        status: Number(response.status) || 0,
+        finalUrl
+      };
+      linkPreviewCheckCache.set(cacheKey, { expiresAt: Date.now() + LINK_PREVIEW_CHECK_TTL_MS, payload });
+      return res.json(Object.assign({ ok: true }, payload));
+    }
+    if (contentType && contentType.indexOf('text/html') < 0 && contentType.indexOf('application/xhtml+xml') < 0) {
+      const payload = {
+        embeddable: false,
+        reason: `Unsupported content type: ${contentType.split(';')[0]}`,
+        status: Number(response.status) || 0,
+        finalUrl
+      };
+      linkPreviewCheckCache.set(cacheKey, { expiresAt: Date.now() + LINK_PREVIEW_CHECK_TTL_MS, payload });
+      return res.json(Object.assign({ ok: true }, payload));
+    }
+
+    const evaluated = evaluateLinkEmbeddable(headers, appOrigin, targetOrigin);
+    const payload = {
+      embeddable: !!evaluated.embeddable,
+      reason: String(evaluated.reason || ''),
+      status: Number(response.status) || 0,
+      finalUrl
+    };
+    linkPreviewCheckCache.set(cacheKey, { expiresAt: Date.now() + LINK_PREVIEW_CHECK_TTL_MS, payload });
+    return res.json(Object.assign({ ok: true }, payload));
+  } catch (err) {
+    return res.json({
+      ok: true,
+      embeddable: false,
+      reason: String(err && err.message || 'Preview check failed').slice(0, 220),
+      status: 0,
+      finalUrl: parsedTarget.toString()
     });
   }
 });

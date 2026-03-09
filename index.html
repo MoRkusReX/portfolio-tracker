@@ -245,6 +245,14 @@
           <div id="marketDataGrid" class="mini-grid"></div>
         </section>
 
+        <section id="mobileQuickSummaryPanel" class="panel-block mobile-quick-summary hidden" aria-hidden="true">
+          <div class="section-header">
+            <h4>Quick Summary</h4>
+            <span id="mobileQuickSummaryAsset" class="muted">No asset selected</span>
+          </div>
+          <div id="mobileQuickSummaryGrid" class="mobile-quick-summary__grid"></div>
+        </section>
+
         <section id="linksSocialsBlock" class="panel-block">
           <div class="panel-block__head">
             <h4>Useful Links</h4>
@@ -706,6 +714,13 @@
                 <div id="indicatorExplorerChartFallback" class="chart-fallback hidden">Chart unavailable.</div>
               </div>
             </section>
+            <section id="indicatorExplorerQuickSummaryPanel" class="panel-block indicator-explorer-quick-summary mobile-quick-summary hidden" aria-hidden="true">
+              <div class="section-header">
+                <h4>Quick Summary</h4>
+                <span id="indicatorExplorerQuickSummaryAsset" class="muted">No asset selected</span>
+              </div>
+              <div id="indicatorExplorerQuickSummaryGrid" class="mobile-quick-summary__grid"></div>
+            </section>
             <section class="panel-block panel-block--news">
               <div class="panel-block__head">
                 <h4>News Feed</h4>
@@ -758,6 +773,26 @@
         <button id="panelViewerCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
       </div>
       <div id="panelViewerHost" class="panel-viewer-host"></div>
+    </div>
+  </div>
+
+  <div id="linkViewerModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-link-viewer="1"></div>
+    <div class="modal__dialog modal__dialog--wide link-viewer-modal glass" role="dialog" aria-modal="true" aria-labelledby="linkViewerTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="linkViewerTitle">Link Preview</h3>
+          <div id="linkViewerSubtitle" class="muted">Open any external link in-app.</div>
+        </div>
+        <div class="link-viewer-actions">
+          <a id="linkViewerOpenExternalBtn" class="btn btn--ghost btn--tiny" href="#" target="_blank" rel="noopener noreferrer" data-bypass-link-viewer="1">Open in new tab</a>
+          <button id="linkViewerCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div class="link-viewer-host">
+        <iframe id="linkViewerFrame" title="External Link Preview" loading="lazy"></iframe>
+        <div id="linkViewerFallback" class="link-viewer-fallback muted">If a site blocks embedded preview, use "Open in new tab".</div>
+      </div>
     </div>
   </div>
 
@@ -814,6 +849,7 @@
   <script src="scripts/api/fundamentals.js"></script>
   <script src="scripts/sector-allocation.js"></script>
   <script src="scripts/indicator-engine.js"></script>
+  <script src="scripts/risk-meter.js"></script>
   <script src="scripts/api/indicators.js"></script>
   <script src="scripts/particles.js"></script>
   <script src="scripts/charts.js"></script>

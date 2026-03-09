@@ -275,6 +275,48 @@
     });
   }
 
+  function marketFromStooqSymbol(stooq) {
+    var text = String(stooq || '').trim().toLowerCase();
+    if (/\.uk$/.test(text)) return 'LSE';
+    if (/\.ie$/.test(text)) return 'ISE';
+    return 'US';
+  }
+
+  function localCatalogSearch(query, count) {
+    var q = String(query || '').trim().toUpperCase();
+    if (!q) return [];
+    var state = window.PT && window.PT.State;
+    var stocks = state && state.symbols && Array.isArray(state.symbols.stocks) ? state.symbols.stocks : [];
+    return stocks
+      .map(function (row) {
+        var symbol = String(row && row.symbol || '').trim().toUpperCase();
+        if (!symbol) return null;
+        var stooq = String(row && row.stooq || '').trim().toLowerCase();
+        var yahooSymbol = String(row && row.yahooSymbol || symbol).trim().toUpperCase();
+        return {
+          type: 'stock',
+          symbol: symbol,
+          yahooSymbol: yahooSymbol,
+          name: String(row && row.name || symbol).trim(),
+          stooq: stooq || (symbol.toLowerCase() + '.us'),
+          market: String(row && row.market || marketFromStooqSymbol(stooq)).trim() || 'US'
+        };
+      })
+      .filter(function (item) {
+        if (!item) return false;
+        var symbol = String(item.symbol || '').toUpperCase();
+        var name = String(item.name || '').toUpperCase();
+        return symbol.indexOf(q) >= 0 || name.indexOf(q) >= 0;
+      })
+      .sort(function (a, b) {
+        var da = stockScore(a, q);
+        var db = stockScore(b, q);
+        if (da !== db) return da - db;
+        return a.symbol.localeCompare(b.symbol);
+      })
+      .slice(0, count || 12);
+  }
+
   function normalizeExchangeLabel(exchange) {
     var raw = String(exchange || '').trim();
     if (!raw) return 'NASDAQ';
@@ -508,50 +550,10 @@
     searchSymbols: function (query) {
       var q = String(query || '').trim();
       if (!q) return Promise.resolve([]);
-      var yahooCount = q.length === 1 ? 50 : 20;
-      var url = 'https://query1.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(q) + '&quotesCount=' + yahooCount + '&newsCount=0';
-      var yahooJsonpPromise = useLocalProxy() ? Promise.resolve([]) : yahooJsonpSearch(q, 12);
-      var yahooPromise = fetch(proxifyUrl(url), { cache: 'no-store', __ptDebugLabel: 'StockAPI.searchSymbols' }).then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      }).then(function (data) {
-        var quotes = Array.isArray(data && data.quotes) ? data.quotes : [];
-        return quotes
-          .filter(function (row) {
-            var symbol = String(row.symbol || '');
-            var exch = String(row.exchange || row.exchDisp || '');
-            var qt = String(row.quoteType || '').toUpperCase();
-            return symbol &&
-              (/^(EQUITY|ETF|COMMONSTOCK)$/.test(qt)) &&
-              /NASDAQ|NMS|NGM|NCM|NYSE|NYQ|AMEX|ASE|ARCA|PCX|LSE|LON|IOB|DUB|ISE/i.test(exch);
-          })
-          .map(function (row) {
-            var yahooSym = String(row.symbol || '').toUpperCase();
-            var displaySym = splitYahooDisplaySymbol(yahooSym);
-            var suffix = stooqSuffixFromExchange(row.exchDisp || row.exchange || 'NASDAQ', yahooSym);
-            return {
-              type: 'stock',
-              symbol: displaySym,
-              yahooSymbol: yahooSym,
-              name: row.shortname || row.longname || row.symbol,
-              stooq: displaySym.toLowerCase() + '.' + suffix,
-              market: normalizeExchangeLabel(row.exchDisp || row.exchange || 'NASDAQ')
-            };
-          })
-          .sort(function (a, b) {
-            var da = stockScore(a, q);
-            var db = stockScore(b, q);
-            if (da !== db) return da - db;
-            return a.symbol.localeCompare(b.symbol);
-          })
-          .slice(0, 12);
-      });
-
-      return Promise.allSettled([probeExactTickerStooq(q), yahooJsonpPromise, yahooPromise]).then(function (results) {
+      var catalogItems = localCatalogSearch(q, 12);
+      return Promise.allSettled([probeExactTickerStooq(q)]).then(function (results) {
         var probeItems = results[0].status === 'fulfilled' ? results[0].value : [];
-        var yahooJsonpItems = results[1].status === 'fulfilled' ? results[1].value : [];
-        var yahooItems = results[2].status === 'fulfilled' ? results[2].value : [];
-        var merged = dedupeBySymbol([].concat(probeItems, yahooJsonpItems, yahooItems))
+        var merged = dedupeBySymbol([].concat(probeItems, catalogItems))
           .sort(function (a, b) {
             var da = stockScore(a, q);
             var db = stockScore(b, q);
@@ -559,12 +561,6 @@
             return a.symbol.localeCompare(b.symbol);
           })
           .slice(0, 8);
-        if (!merged.length &&
-            results[0].status === 'rejected' &&
-            results[1].status === 'rejected' &&
-            results[2].status === 'rejected') {
-          throw new Error('Stock search unavailable');
-        }
         return merged;
       });
     },

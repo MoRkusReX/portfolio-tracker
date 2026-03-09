@@ -366,9 +366,12 @@ html[data-layout="wide"] .portfolio-grid {
   #detailPanel {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-rows: min-content min-content min-content min-content minmax(0, 1fr);
     grid-auto-rows: min-content;
     align-content: start;
     gap: 0.8rem;
+    overflow: hidden;
+    min-height: 0;
   }
 
   #detailPanel > .section-header,
@@ -381,49 +384,68 @@ html[data-layout="wide"] .portfolio-grid {
   #detailPanel > #marketDataBlock {
     grid-column: 1;
     align-self: stretch;
+    min-height: 0;
   }
 
   #detailPanel > #linksSocialsBlock {
     grid-column: 2;
     align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  #detailPanel > #linksSocialsBlock .links-socials-stack,
+  #detailPanel > #linksSocialsBlock .links-socials-group {
+    min-height: 0;
+  }
+
+  #detailPanel > #linksSocialsBlock #usefulLinksList.news-list {
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 0.15rem;
   }
 }
 
 @media (min-width: 1500px) {
-  html[data-layout="wide"] .side-panel {
+  html[data-layout="wide"] #detailPanel {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-rows: min-content min-content min-content min-content minmax(0, 1fr);
     grid-auto-rows: min-content;
     align-content: start;
     gap: 0.8rem;
     padding: 0.9rem;
-    max-height: calc(100vh - 5.5rem);
+    min-height: 0;
   }
 
-  html[data-layout="wide"] .side-panel > .section-header,
-  html[data-layout="wide"] .side-panel > .detail-meta,
-  html[data-layout="wide"] .side-panel > .chart-timeframes,
-  html[data-layout="wide"] .side-panel > .chart-wrap--line {
+  html[data-layout="wide"] #detailPanel > .section-header,
+  html[data-layout="wide"] #detailPanel > .detail-meta,
+  html[data-layout="wide"] #detailPanel > .chart-timeframes,
+  html[data-layout="wide"] #detailPanel > .chart-wrap--line {
     grid-column: 1 / -1;
   }
 
-  html[data-layout="wide"] .side-panel > .chart-wrap--line {
+  html[data-layout="wide"] #detailPanel > .chart-wrap--line {
     height: 252px;
   }
 
-  html[data-layout="wide"] .side-panel > .panel-block {
+  html[data-layout="wide"] #detailPanel > .panel-block {
     margin: 0;
     padding: 0.7rem;
+    min-height: 0;
   }
 
-  html[data-layout="wide"] .side-panel .news-list,
-  html[data-layout="wide"] .side-panel .events-list {
+  html[data-layout="wide"] #detailPanel #newsList.news-list,
+  html[data-layout="wide"] #detailPanel .events-list {
     max-height: 220px;
     overflow: auto;
     padding-right: 0.15rem;
   }
 
-  html[data-layout="wide"] .side-panel .twitter-placeholder {
+  html[data-layout="wide"] #detailPanel .twitter-placeholder {
     min-height: 110px;
   }
 
@@ -439,12 +461,20 @@ html[data-layout="wide"] .portfolio-grid {
   html[data-layout="wide"] #linksSocialsBlock {
     grid-column: 2;
     align-self: stretch;
+    min-height: 0;
+  }
+
+  html[data-layout="wide"] #linksSocialsBlock .links-socials-stack,
+  html[data-layout="wide"] #linksSocialsBlock .links-socials-group {
+    min-height: 0;
   }
 
   html[data-layout="wide"] #linksSocialsBlock #usefulLinksList.news-list {
     max-height: none;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+    padding-right: 0.15rem;
   }
 
 }

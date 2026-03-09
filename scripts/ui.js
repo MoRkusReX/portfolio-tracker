@@ -238,6 +238,9 @@
         detailMeta: qs('detailMeta'),
         detailChartTimeframes: qs('detailChartTimeframes'),
         externalLink: qs('externalLink'),
+        mobileQuickSummaryPanel: qs('mobileQuickSummaryPanel'),
+        mobileQuickSummaryAsset: qs('mobileQuickSummaryAsset'),
+        mobileQuickSummaryGrid: qs('mobileQuickSummaryGrid'),
         marketDataGrid: qs('marketDataGrid'),
         newsPanel: qs('newsPanel'),
         fundamentalsPanel: qs('fundamentalsPanel'),
@@ -343,6 +346,9 @@
         indicatorExplorerChartTimeframes: qs('indicatorExplorerChartTimeframes'),
         indicatorExplorerChart: qs('indicatorExplorerChart'),
         indicatorExplorerChartFallback: qs('indicatorExplorerChartFallback'),
+        indicatorExplorerQuickSummaryPanel: qs('indicatorExplorerQuickSummaryPanel'),
+        indicatorExplorerQuickSummaryAsset: qs('indicatorExplorerQuickSummaryAsset'),
+        indicatorExplorerQuickSummaryGrid: qs('indicatorExplorerQuickSummaryGrid'),
         indicatorExplorerAssetLabel: qs('indicatorExplorerAssetLabel'),
         indicatorExplorerModeLabel: qs('indicatorExplorerModeLabel'),
         indicatorExplorerFavoriteBtn: qs('indicatorExplorerFavoriteBtn'),
@@ -372,6 +378,13 @@
         panelViewerTitle: qs('panelViewerTitle'),
         panelViewerSubtitle: qs('panelViewerSubtitle'),
         panelViewerHost: qs('panelViewerHost'),
+        linkViewerModal: qs('linkViewerModal'),
+        linkViewerCloseBtn: qs('linkViewerCloseBtn'),
+        linkViewerTitle: qs('linkViewerTitle'),
+        linkViewerSubtitle: qs('linkViewerSubtitle'),
+        linkViewerFrame: qs('linkViewerFrame'),
+        linkViewerFallback: qs('linkViewerFallback'),
+        linkViewerOpenExternalBtn: qs('linkViewerOpenExternalBtn'),
         assetTypeInput: qs('assetTypeInput'),
         assetSearchInput: qs('assetSearchInput'),
         assetSelectedId: qs('assetSelectedId'),
@@ -434,11 +447,11 @@
         if (self._pendingFundamentalsHelpTarget !== target) return;
         self._pendingFundamentalsHelpTarget = null;
         self._showFundamentalsHelpTooltip(target);
-      }, 500);
+      }, 1000);
     },
     _showFundamentalsHelpTooltip: function (target) {
       if (!target) return;
-      var text = String(target.getAttribute('data-tooltip') || '').trim();
+      var text = String(target.getAttribute('data-help-tooltip') || target.getAttribute('data-tooltip') || '').trim();
       if (!text) return;
       var tip = this._ensureFundamentalsHelpTooltipEl();
       tip.textContent = text;
@@ -457,11 +470,11 @@
       this._activeFundamentalsHelpTarget = null;
     },
     _bindFundamentalsHelpTooltip: function () {
-      if (this._fundamentalsHelpBound || !this.el || !this.el.fundamentalsGrid) return;
+      if (this._fundamentalsHelpBound) return;
       var self = this;
-      var root = this.el.fundamentalsGrid;
+      var root = document;
       function findHelp(node) {
-        return node && node.closest ? node.closest('.fundamentals-metric__help') : null;
+        return node && node.closest ? node.closest('[data-help-tooltip], .fundamentals-metric__help') : null;
       }
       root.addEventListener('mouseover', function (event) {
         var target = findHelp(event.target);
@@ -1112,6 +1125,82 @@
         return 'fundamentals-chip fundamentals-chip--neutral';
       }
 
+      function riskChipClass(label) {
+        var v = String(label || '').toLowerCase();
+        if (v === 'low') return 'fundamentals-chip fundamentals-chip--risk-low';
+        if (v === 'moderate') return 'fundamentals-chip fundamentals-chip--risk-moderate';
+        if (v === 'elevated') return 'fundamentals-chip fundamentals-chip--risk-elevated';
+        if (v === 'high') return 'fundamentals-chip fundamentals-chip--risk-high';
+        if (v === 'very high') return 'fundamentals-chip fundamentals-chip--risk-very-high';
+        return 'fundamentals-chip fundamentals-chip--risk-na';
+      }
+
+      function riskRowTone(label) {
+        var v = String(label || '').toLowerCase();
+        if (v === 'low') return 'low';
+        if (v === 'moderate') return 'moderate';
+        if (v === 'elevated') return 'elevated';
+        if (v === 'high') return 'high';
+        if (v === 'very high') return 'very-high';
+        return 'na';
+      }
+
+      function fmtRiskScore(score) {
+        return isFinite(Number(score)) ? String(Math.round(Number(score))) : 'n/a';
+      }
+
+      function riskComponentsSummary(components) {
+        var c = components && typeof components === 'object' ? components : {};
+        var parts = [];
+        function add(label, value) {
+          if (!isFinite(Number(value))) return;
+          parts.push(label + ' ' + String(Math.round(Number(value))));
+        }
+        add('Price', c.priceRisk);
+        add('Liquidity', c.liquidityRisk);
+        if (Object.prototype.hasOwnProperty.call(c, 'fundamentalRisk')) add('Fundamentals', c.fundamentalRisk);
+        if (Object.prototype.hasOwnProperty.call(c, 'eventRegimeRisk')) add('Regime/Event', c.eventRegimeRisk);
+        if (Object.prototype.hasOwnProperty.call(c, 'tokenRisk')) add('Token', c.tokenRisk);
+        if (Object.prototype.hasOwnProperty.call(c, 'regimeRisk')) add('Regime', c.regimeRisk);
+        return parts.join(' • ');
+      }
+
+      function riskMeterSectionHtml(riskMeter) {
+        var meter = riskMeter && typeof riskMeter === 'object' ? riskMeter : null;
+        var timeframes = meter && meter.timeframes && typeof meter.timeframes === 'object' ? meter.timeframes : {};
+        var keys = ['1d', '1w', '1m'];
+        var rows = keys.map(function (key) {
+          var row = timeframes[key] && typeof timeframes[key] === 'object' ? timeframes[key] : null;
+          if (!row) {
+            return '<article class="fundamentals-risk-row fundamentals-risk-row--na"><div class="fundamentals-risk-row__head"><span class="fundamentals-risk-row__timeframe">' + key.toUpperCase() + '</span><span class="' + riskChipClass('n/a') + '">n/a</span></div><div class="fundamentals-risk-row__line muted">Not enough data</div></article>';
+          }
+          var reasons = Array.isArray(row.reasons) ? row.reasons.filter(Boolean).slice(0, 3) : [];
+          var tone = riskRowTone(row.label);
+          return '<article class="fundamentals-risk-row fundamentals-risk-row--' + tone + '">' +
+            '<div class="fundamentals-risk-row__head">' +
+              '<span class="fundamentals-risk-row__timeframe">' + key.toUpperCase() + ': ' + fmtRiskScore(row.score) + '</span>' +
+              '<span class="' + riskChipClass(row.label) + '">' + esc(String(row.label || 'n/a')) + '</span>' +
+            '</div>' +
+            '<div class="fundamentals-risk-row__line">' + esc(riskComponentsSummary(row.components)) + '</div>' +
+            (reasons.length ? ('<div class="fundamentals-risk-row__reasons">' + reasons.map(function (reason) {
+              return '<span>' + esc(reason) + '</span>';
+            }).join('') + '</div>') : '') +
+          '</article>';
+        }).join('');
+        var updatedText = meter && isFinite(Number(meter.updatedAt))
+          ? ('Updated ' + new Date(Number(meter.updatedAt)).toLocaleString())
+          : 'Using cached risk snapshot when available.';
+        var note = String(meter && meter.note || 'Risk Meter estimates trading risk using volatility, drawdown, liquidity, market structure, and fundamentals/tokenomics. It is not a prediction.').trim();
+        return '<section class="fundamentals-section fundamentals-section--risk">' +
+          '<div class="fundamentals-section__title-row">' +
+            '<span class="fundamentals-section__title">Risk Meter</span>' +
+            '<span class="fundamentals-section__count">' + esc(updatedText) + '</span>' +
+          '</div>' +
+          '<div class="fundamentals-risk-meter__note">' + esc(note) + '</div>' +
+          '<div class="fundamentals-risk-meter">' + rows + '</div>' +
+        '</section>';
+      }
+
       function isTechnicalFundamentalsNote(text) {
         var v = String(text || '').trim().toLowerCase();
         if (!v) return false;
@@ -1280,6 +1369,7 @@
           '<div class="fundamentals-summary__score">Quality and valuation are scored independently.</div>';
       }
 
+      var riskSection = riskMeterSectionHtml(panel.riskMeter);
       this.el.fundamentalsGrid.innerHTML = sections.map(function (section) {
         var metrics = Array.isArray(section && section.metrics) ? section.metrics : [];
         return '<section class="fundamentals-section">' +
@@ -1289,18 +1379,18 @@
               var explain = metricExplanation(metric);
               var reasonText = String(metric && metric.reasonIfUnavailable || '').trim();
               var metricDisplay = metric && metric.display ? String(metric.display) : 'n/a';
+              var metricLabel = metric && metric.label ? String(metric.label) : '';
               var showReason = (!metric || metric.value == null) && !!reasonText;
               var valueText = showReason ? 'Unavailable' : metricDisplay;
               return '<article class="fundamentals-metric">' +
-                '<div class="fundamentals-metric__head"><span>' + esc(metric && metric.label ? metric.label : '') + '</span><span class="' + chipClass(metric && metric.status) + '">' + esc(metric && metric.status ? metric.status : 'Neutral') + '</span></div>' +
+                '<div class="fundamentals-metric__head"><span class="fundamentals-metric__title" tabindex="0" data-help-tooltip="' + esc(explain) + '" aria-label="' + esc((metricLabel || 'Metric') + ' explanation') + '">' + esc(metricLabel) + '</span><span class="' + chipClass(metric && metric.status) + '">' + esc(metric && metric.status ? metric.status : 'Neutral') + '</span></div>' +
                 '<strong>' + esc(valueText) + '</strong>' +
                 (showReason ? ('<small class="fundamentals-metric__reason">' + esc(reasonText) + '</small>') : '') +
-                '<span class="fundamentals-metric__help" tabindex="0" role="button" aria-label="What is ' + esc(metric && metric.label ? metric.label : 'this metric') + '?" data-tooltip="' + esc(explain) + '">?</span>' +
               '</article>';
             }).join('') +
           '</div>' +
         '</section>';
-      }).join('');
+      }).join('') + riskSection;
 
       if (this.el.fundamentalsReasons) {
         if (reasonGroups.length) {
@@ -1465,10 +1555,11 @@
       function techBlock(title, status, metrics, note, noteClass) {
         var list = Array.isArray(metrics) ? metrics : [];
         var count = list.length <= 1 ? 1 : (list.length === 2 ? 2 : 3);
+        var helpText = indicatorHelpText(title);
         var meta = note ? ('<span class="indicator-tech__meta' + (noteClass ? (' ' + esc(noteClass)) : '') + '">• ' + esc(note) + '</span>') : '';
         return '<div class="indicator-tech">' +
           '<div class="indicator-tech__head">' +
-            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">' + esc(title) + '</div>' + meta + '</div>' +
+            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + esc(helpText) + '" aria-label="' + esc(title + ' explanation') + '">' + esc(title) + '</div>' + meta + '</div>' +
             '<span class="' + pillClass(status) + '">' + esc(status || 'Neutral') + '</span>' +
           '</div>' +
           '<div class="indicator-tech__metrics indicator-tech__metrics--' + count + '">' +
@@ -1516,6 +1607,24 @@
         return 'Neutral';
       }
 
+      function indicatorHelpText(title) {
+        var byTitle = {
+          'Trend Meter': 'Trend Meter: Weighted multi-timeframe trend composite built from EMA structure, RSI, MACD, support/resistance, ADX, and volume confirmation.',
+          'Support & Resistance': 'Support & Resistance: Combines Pivot levels and Donchian channel structure to highlight likely reaction zones around price.',
+          'EMA Trend': 'EMA Trend: Uses EMA20/EMA50/EMA200 structure with close location to show whether short/medium/long trend alignment is bullish, bearish, or mixed.',
+          'RSI 14': 'RSI 14: Wilder momentum oscillator (0-100). Overbought is typically above 70 and oversold is typically below 30; mid-range values are usually neutral momentum.',
+          'MACD': 'MACD: Difference between fast and slow EMAs plus signal line/histogram. Confirms momentum direction and acceleration.',
+          'Bollinger': 'Bollinger: 20-period mean with 2 standard deviation bands. Helps read relative stretch and volatility context.',
+          'ADX 14': 'ADX 14: Trend-strength gauge. Higher ADX means stronger directional regime; lower ADX suggests weaker/sideways structure.',
+          'Volume Confirm': 'Volume Confirm: Compares current volume to MA20 and candle direction to confirm whether moves are supported by participation.',
+          'Fibonacci': 'Fibonacci: Local retracement levels from swing high/low (23.6/38.2/50/61.8/78.6) used to frame pullback and structure risk zones.',
+          'EMA Position': 'EMA Position: Explains where current price sits versus EMA20 and EMA50 (strong bullish, pullback, trend test, or bearish risk).',
+          'Reversal': 'Reversal: Early bounce/reversal setup score based on oversold conditions, support proximity, momentum improvement, and volume clues.',
+          'Trade Plan': 'Trade Plan: Estimated entry, take-profit, and failure-exit zones from multi-indicator confluence. Informational only, not execution advice.'
+        };
+        return byTitle[String(title || '').trim()] || 'Technical indicator snapshot used for directional context and risk framing.';
+      }
+
       function trendMeterBlock() {
         var provided = (config && config.trendMeter) || {};
         var hasAny = ['1d', '1w', '1m'].some(function (key) { return !!timeframes[key]; });
@@ -1555,7 +1664,7 @@
           '</details>';
         }).join('');
         return '<div class="trend-meter__head">' +
-          '<div class="trend-meter__title">Trend Meter</div>' +
+          '<div class="trend-meter__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('Trend Meter')) + '" aria-label="Trend Meter explanation">Trend Meter</div>' +
           '<div class="trend-meter__overall">' +
             '<span class="trend-meter__overall-score">Overall Score ' + esc(String(overallScore)) + '</span>' +
           '</div>' +
@@ -1580,7 +1689,7 @@
           : '';
         return '<div class="indicator-sr">' +
           '<div class="indicator-sr__head">' +
-            '<div class="indicator-sr__title">Support &amp; Resistance</div>' +
+            '<div class="indicator-sr__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('Support & Resistance')) + '" aria-label="Support and resistance explanation">Support &amp; Resistance</div>' +
             '<span class="' + pillClass(srStatus) + '">' + esc(srStatus || 'Neutral') + '</span>' +
           '</div>' +
           '<div class="indicator-sr__nearest">' +
@@ -1631,7 +1740,7 @@
         if (!fib.available) {
           return '<div class="indicator-tech indicator-tech--fib">' +
             '<div class="indicator-tech__head">' +
-              '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">Fibonacci</div></div>' +
+              '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('Fibonacci')) + '" aria-label="Fibonacci explanation">Fibonacci</div></div>' +
               '<span class="indicator-pill indicator-pill--neutral">Not enough data</span>' +
             '</div>' +
             '<div class="indicator-tech__note">' + esc(fib.reason || 'Not enough data') + '</div>' +
@@ -1655,7 +1764,7 @@
         var resistanceTone = isFinite(Number(fib.nearestFibAbove)) ? ' indicator-sr__metric--resistance' : '';
         return '<div class="indicator-sr indicator-fib">' +
           '<div class="indicator-sr__head">' +
-            '<div class="indicator-sr__title">Fibonacci</div>' +
+            '<div class="indicator-sr__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('Fibonacci')) + '" aria-label="Fibonacci explanation">Fibonacci</div>' +
             '<span class="' + fibPillClass(status) + '">' + esc(status) + '</span>' +
           '</div>' +
           '<div class="indicator-sr__pivot-grid indicator-fib__levels">' + levelsHtml + '</div>' +
@@ -1677,7 +1786,7 @@
         return '<div class="indicator-tech indicator-tech--reversal">' +
           '<div class="indicator-tech__head">' +
             '<div class="indicator-tech__title-wrap">' +
-              '<div class="indicator-tech__title">Reversal</div>' +
+              '<div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('Reversal')) + '" aria-label="Reversal explanation">Reversal</div>' +
               '<span class="indicator-tech__meta">• ' + esc(label) + '</span>' +
             '</div>' +
             '<span class="indicator-reversal__badge">' + esc(String(score)) + '/5</span>' +
@@ -1706,7 +1815,7 @@
         var toneClass = emaPositionPillClass(label);
         return '<div class="indicator-tech indicator-tech--ema-position">' +
           '<div class="indicator-tech__head">' +
-            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">EMA Position</div>' + (relation ? '<span class="indicator-tech__meta">• ' + esc(relation) + '</span>' : '') + '</div>' +
+            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('EMA Position')) + '" aria-label="EMA position explanation">EMA Position</div>' + (relation ? '<span class="indicator-tech__meta">• ' + esc(relation) + '</span>' : '') + '</div>' +
             '<span class="indicator-pill indicator-ema-position__badge ' + toneClass + '">' + esc(label) + '</span>' +
           '</div>' +
           '<div class="indicator-tech__metrics indicator-tech__metrics--3 indicator-ema-position__values">' +
@@ -1750,7 +1859,7 @@
         var confidenceText = hasData ? (confidence + ' (' + String(Number(plan.confidencePoints || 0)) + ')') : 'Low (0)';
         return '<div class="indicator-tech indicator-tech--tradeplan">' +
           '<div class="indicator-tech__head">' +
-            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title">Trade Plan</div></div>' +
+            '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + esc(indicatorHelpText('Trade Plan')) + '" aria-label="Trade plan explanation">Trade Plan</div></div>' +
             '<span class="' + tradeConfidencePillClass(confidence) + '">' + esc(confidence) + '</span>' +
           '</div>' +
           '<div class="indicator-tech__metrics indicator-tech__metrics--3">' +
