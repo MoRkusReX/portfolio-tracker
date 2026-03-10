@@ -195,6 +195,7 @@
         holdingsPrivacyToggle: qs('holdingsPrivacyToggle'),
         holdingsScrambleToggle: qs('holdingsScrambleToggle'),
         exportBtn: qs('exportBtn'),
+        exportAnalysisBtn: qs('exportAnalysisBtn'),
         importInput: qs('importInput'),
         addAssetBtn: qs('addAssetBtn'),
         refreshBtn: qs('refreshBtn'),
@@ -215,6 +216,7 @@
         allocationModeToggle: qs('allocationModeToggle'),
         allocationModeStocksBtn: qs('allocationModeStocksBtn'),
         allocationModeSectorsBtn: qs('allocationModeSectorsBtn'),
+        allocationResetSectorsBtn: qs('allocationResetSectorsBtn'),
         allocationPanel: qs('allocationPanel'),
         openAllocationPanelBtn: qs('openAllocationPanelBtn'),
         statusBadge: qs('statusBadge'),
@@ -295,6 +297,12 @@
         portfolioNameForm: qs('portfolioNameForm'),
         portfolioNameInput: qs('portfolioNameInput'),
         portfolioNameModeLabel: qs('portfolioNameModeLabel'),
+        portfolioDeleteModal: qs('portfolioDeleteModal'),
+        portfolioDeleteModalCloseBtn: qs('portfolioDeleteModalCloseBtn'),
+        portfolioDeleteCancelBtn: qs('portfolioDeleteCancelBtn'),
+        portfolioDeleteConfirmBtn: qs('portfolioDeleteConfirmBtn'),
+        portfolioDeleteModeLabel: qs('portfolioDeleteModeLabel'),
+        portfolioDeleteModalMessage: qs('portfolioDeleteModalMessage'),
         sectorEditModal: qs('sectorEditModal'),
         sectorEditModalCloseBtn: qs('sectorEditModalCloseBtn'),
         sectorEditCancelBtn: qs('sectorEditCancelBtn'),
@@ -313,7 +321,9 @@
         apiSourcesModalCloseBtn: qs('apiSourcesModalCloseBtn'),
         apiSourcesContent: qs('apiSourcesContent'),
         indicatorsPanel: qs('indicatorsPanel'),
+        exportIndicatorsPdfBtn: qs('exportIndicatorsPdfBtn'),
         openIndicatorsPanelBtn: qs('openIndicatorsPanelBtn'),
+        exportFundamentalsPdfBtn: qs('exportFundamentalsPdfBtn'),
         openFundamentalsPanelBtn: qs('openFundamentalsPanelBtn'),
         openNewsPanelBtn: qs('openNewsPanelBtn'),
         indicatorExplorerBtn: qs('indicatorExplorerBtn'),
@@ -352,6 +362,7 @@
         indicatorExplorerAssetLabel: qs('indicatorExplorerAssetLabel'),
         indicatorExplorerModeLabel: qs('indicatorExplorerModeLabel'),
         indicatorExplorerFavoriteBtn: qs('indicatorExplorerFavoriteBtn'),
+        indicatorExplorerExportAnalysisBtn: qs('indicatorExplorerExportAnalysisBtn'),
         indicatorExplorerOverallPill: qs('indicatorExplorerOverallPill'),
         indicatorExplorerMeta: qs('indicatorExplorerMeta'),
         indicatorExplorerTrendMeter: qs('indicatorExplorerTrendMeter'),
@@ -863,12 +874,70 @@
         var plChangeText = ctx.hideHoldings
           ? ('P/L ' + pctText(displayPlPct))
           : (fmtCurrency(displayPlAmount) + ' (' + pctText(displayPlPct) + ')');
+        var tradeTargetSignal = item && item.tradeTargetSignal && typeof item.tradeTargetSignal === 'object'
+          ? item.tradeTargetSignal
+          : null;
+        function targetCoinIconMarkup(coinCount) {
+          var count = Math.max(1, Math.min(3, Number(coinCount) || 1));
+          var dollarCount = count;
+          var signs = '';
+          for (var i = 0; i < dollarCount; i++) {
+            signs += '<span class="asset-row__target-dollar-sign" aria-hidden="true">$</span>';
+          }
+          return '<span class="asset-row__target-icon asset-row__target-icon--' + count + '" aria-hidden="true">' +
+            '<span class="asset-row__target-dollar-stack" aria-hidden="true">' + signs + '</span>' +
+          '</span>';
+        }
+        function targetCoinsMarkup() {
+          if (ctx.hideHoldings) return '';
+          var effectiveSignal = tradeTargetSignal;
+          if (scrambleEnabled && item.type === 'stock') {
+            // Scramble mode should not leak real target proximity signals.
+            var showFake = scrambleUnit(scrambleSeed + ':' + rowKey, 'target-coins-show') >= 0.35;
+            if (!showFake) {
+              return '<span class="asset-row__target-coins asset-row__target-coins--empty" aria-hidden="true"></span>';
+            }
+            var fakeCoinCount = 1 + Math.floor(scrambleUnit(scrambleSeed + ':' + rowKey, 'target-coins-count') * 3);
+            if (fakeCoinCount > 3) fakeCoinCount = 3;
+            var fakeDiffAbs = 0.25 + (scrambleUnit(scrambleSeed + ':' + rowKey, 'target-coins-diff') * 7.75);
+            var fakeAboveTarget = scrambleUnit(scrambleSeed + ':' + rowKey, 'target-coins-above') >= 0.72;
+            var fakeDiffSigned = fakeAboveTarget ? -fakeDiffAbs : fakeDiffAbs;
+            var basePrice = isFinite(Number(displayPrice)) ? Number(displayPrice) : (isFinite(Number(item.price)) ? Number(item.price) : 1);
+            effectiveSignal = {
+              coins: fakeCoinCount,
+              timeframeLabel: fakeCoinCount === 3 ? '1M' : (fakeCoinCount === 2 ? '1W' : '1D'),
+              targetMid: Math.max(0.0001, basePrice * (1 + (fakeDiffSigned / 100))),
+              diffPct: fakeDiffSigned,
+              aboveTarget: fakeAboveTarget
+            };
+          }
+          if (!effectiveSignal) {
+            return '<span class="asset-row__target-coins asset-row__target-coins--empty" aria-hidden="true"></span>';
+          }
+          var coinCount = Math.max(1, Math.min(3, Number(effectiveSignal.coins) || 0));
+          if (!coinCount) {
+            return '<span class="asset-row__target-coins asset-row__target-coins--empty" aria-hidden="true"></span>';
+          }
+          var targetMid = Number(effectiveSignal.targetMid);
+          var targetText = isFinite(targetMid) && targetMid > 0 ? fmtAssetUnitPrice(targetMid, item.type) : 'n/a';
+          var diffPct = Math.abs(Number(effectiveSignal.diffPct || 0));
+          var distanceText = isFinite(diffPct) ? (diffPct.toFixed(2) + '%') : 'n/a';
+          var aboveTarget = !!effectiveSignal.aboveTarget;
+          var targetTf = coinCount === 3 ? '1M' : (coinCount === 2 ? '1W' : '1D');
+          var tooltip = aboveTarget
+            ? (targetTf + ' target reached (above target midpoint ' + targetText + ' by ' + distanceText + ')')
+            : (targetTf + ' target midpoint: ' + targetText + ' (' + distanceText + ' away)');
+          return '<span class="asset-row__target-coins asset-row__target-coins--active" title="' + esc(tooltip) + '" aria-label="' + esc(tooltip) + '">' +
+            targetCoinIconMarkup(coinCount) +
+          '</span>';
+        }
         var plText = ctx.hideHoldings
           ? plChangeText
           : (plPriceText + ' ' + plChangeText);
         plEl.innerHTML = ctx.hideHoldings
           ? ('<span class="asset-row__pl-change">' + esc(plChangeText) + '</span>')
           : (
+            targetCoinsMarkup() +
             '<span class="asset-row__pl-price">' + esc(plPriceText) + '</span>' +
             '<span class="asset-row__pl-sep" aria-hidden="true">|</span>' +
             '<span class="asset-row__pl-change">' + esc(plChangeText) + '</span>'
@@ -989,17 +1058,22 @@
           this.el.detailPriceBadge.innerHTML = '';
         }
       }
-      this.el.detailMeta.innerHTML = hideHoldings
-        ? [
-          '<span class="meta-chip">Holdings hidden</span>',
-          '<span class="meta-chip ' + pctClass(computed.plPct) + '">P/L %: ' + pctText(computed.plPct) + '</span>'
-        ].join('')
-        : [
-          '<span class="meta-chip">Qty: ' + fmtNumber(asset.quantity) + '</span>',
-          '<span class="meta-chip">Entry: ' + fmtAssetUnitPrice(asset.entryPrice, asset.type) + '</span>',
-          '<span class="meta-chip">Value: ' + fmtCurrency(computed.marketValue) + '</span>',
-          '<span class="meta-chip ' + pctClass(computed.plPct) + '">P/L: ' + fmtCurrency(computed.plAmount) + ' (' + pctText(computed.plPct) + ')</span>'
-        ].join('');
+      var showDesktopChartMeta = !!(window.matchMedia && window.matchMedia('(min-width: 981px)').matches);
+      this.el.detailMeta.innerHTML = showDesktopChartMeta
+        ? ''
+        : (
+          hideHoldings
+            ? [
+              '<span class="meta-chip">Holdings hidden</span>',
+              '<span class="meta-chip ' + pctClass(computed.plPct) + '">P/L %: ' + pctText(computed.plPct) + '</span>'
+            ].join('')
+            : [
+              '<span class="meta-chip">Qty: ' + fmtNumber(asset.quantity) + '</span>',
+              '<span class="meta-chip">Entry: ' + fmtAssetUnitPrice(asset.entryPrice, asset.type) + '</span>',
+              '<span class="meta-chip">Value: ' + fmtCurrency(computed.marketValue) + '</span>',
+              '<span class="meta-chip ' + pctClass(computed.plPct) + '">P/L: ' + fmtCurrency(computed.plAmount) + ' (' + pctText(computed.plPct) + ')</span>'
+            ].join('')
+        );
     },
     renderExternalLink: function (asset) {
       if (!asset) {
@@ -1055,12 +1129,6 @@
           ['Last fetched', fetchedAtText],
           ['Source stamp', sourceStamp || 'n/a']
         ];
-        if (data && isFinite(Number(data.preMarketPrice))) {
-          entries.splice(6, 0,
-            ['Pre-Mkt', fmtCurrency(data.preMarketPrice)],
-            ['Pre-Mkt %', isFinite(Number(data.preMarketChangePercent)) ? pctText(Number(data.preMarketChangePercent)) : 'n/a']
-          );
-        }
       } else {
         entries = [
           ['Price', fmtAssetUnitPrice(data && data.price, 'crypto')],
@@ -1120,6 +1188,7 @@
 
       function chipClass(status) {
         var v = String(status || '').toLowerCase();
+        if (!v || v === 'n/a' || v === 'na') return 'fundamentals-chip fundamentals-chip--risk-na';
         if (v === 'bullish' || v === 'healthy' || v === 'cheap' || v === 'strong') return 'fundamentals-chip fundamentals-chip--bullish';
         if (v === 'risk' || v === 'weak' || v === 'expensive' || v === 'bearish') return 'fundamentals-chip fundamentals-chip--bearish';
         return 'fundamentals-chip fundamentals-chip--neutral';
@@ -1282,6 +1351,16 @@
       var qualityLabel = String(panel.qualityLabel || panel.label || 'Mixed');
       var valuationLabel = String(panel.valuationLabel || 'n/a');
       var sections = Array.isArray(panel.sections) ? panel.sections : [];
+      var hasMetricValues = sections.some(function (section) {
+        var metrics = Array.isArray(section && section.metrics) ? section.metrics : [];
+        return metrics.some(function (metric) {
+          return metric && metric.value != null;
+        });
+      });
+      if (!hasMetricValues) {
+        qualityLabel = 'n/a';
+        valuationLabel = 'n/a';
+      }
       var valuationSummaryText = String(panel.valuationSummaryText || '').trim();
       var reasons = Array.isArray(panel.reasons) ? panel.reasons : [];
       var reasonGroups = Array.isArray(panel.reasonGroups) ? panel.reasonGroups : [];
@@ -1381,9 +1460,13 @@
               var metricDisplay = metric && metric.display ? String(metric.display) : 'n/a';
               var metricLabel = metric && metric.label ? String(metric.label) : '';
               var showReason = (!metric || metric.value == null) && !!reasonText;
+              var metricUnavailable = !metric || metric.value == null;
+              var metricStatus = metricUnavailable
+                ? 'n/a'
+                : (String(metric && metric.status || '').trim() || 'Neutral');
               var valueText = showReason ? 'Unavailable' : metricDisplay;
               return '<article class="fundamentals-metric">' +
-                '<div class="fundamentals-metric__head"><span class="fundamentals-metric__title" tabindex="0" data-help-tooltip="' + esc(explain) + '" aria-label="' + esc((metricLabel || 'Metric') + ' explanation') + '">' + esc(metricLabel) + '</span><span class="' + chipClass(metric && metric.status) + '">' + esc(metric && metric.status ? metric.status : 'Neutral') + '</span></div>' +
+                '<div class="fundamentals-metric__head"><span class="fundamentals-metric__title" tabindex="0" data-help-tooltip="' + esc(explain) + '" aria-label="' + esc((metricLabel || 'Metric') + ' explanation') + '">' + esc(metricLabel) + '</span><span class="' + chipClass(metricStatus) + '">' + esc(metricStatus) + '</span></div>' +
                 '<strong>' + esc(valueText) + '</strong>' +
                 (showReason ? ('<small class="fundamentals-metric__reason">' + esc(reasonText) + '</small>') : '') +
               '</article>';
@@ -2083,6 +2166,8 @@
       if (!this.el.apiSourcesContent) return;
       var categories = (config && config.categories) || [];
       var autoRefresh = (config && config.autoRefresh) || {};
+      var selectedMode = (config && config.selectedMode) === 'crypto' ? 'crypto' : 'stocks';
+      var selectedAssetType = selectedMode === 'crypto' ? 'crypto' : 'stock';
 
       function intervalFields(modeKey, label, values) {
         var intervalSec = Math.max(15, Number(values && values.intervalSec || 600) || 600);
@@ -2102,18 +2187,31 @@
       }
 
       var html = '<section class="api-config-section">' +
-        '<div class="api-config-section__head"><div><h4>Auto Updates</h4><p>Move refresh timing here instead of the toolbar toggle buttons.</p></div></div>' +
+        '<div class="api-config-section__head"><div><h4>View</h4><p>Switch between stock and crypto source priority.</p></div></div>' +
+        '<div class="controls-toggles">' +
+          '<button type="button" class="btn btn--tiny ' + (selectedMode === 'stocks' ? 'btn--primary' : 'btn--ghost') + '" data-api-sources-view="stocks">Stocks</button>' +
+          '<button type="button" class="btn btn--tiny ' + (selectedMode === 'crypto' ? 'btn--primary' : 'btn--ghost') + '" data-api-sources-view="crypto">Crypto</button>' +
+        '</div>' +
+      '</section>';
+
+      html += '<section class="api-config-section">' +
+        '<div class="api-config-section__head"><div><h4>Auto Updates</h4><p>Manage refresh timing for ' + esc(selectedMode) + ' here.</p></div></div>' +
         '<div class="api-auto-grid">' +
-          intervalFields('stocks', 'Stocks', autoRefresh.stocks || {}) +
-          intervalFields('crypto', 'Crypto', autoRefresh.crypto || {}) +
+          intervalFields(selectedMode, selectedMode === 'crypto' ? 'Crypto' : 'Stocks', autoRefresh[selectedMode] || {}) +
         '</div>' +
       '</section>';
 
       categories.forEach(function (category) {
+        var items = (category.items || []).filter(function (item) {
+          var assetTypes = Array.isArray(item && item.assetTypes) ? item.assetTypes : [];
+          if (!assetTypes.length) return true;
+          return assetTypes.indexOf(selectedAssetType) >= 0;
+        });
+        if (!items.length) return;
         html += '<section class="api-config-section">' +
           '<div class="api-config-section__head"><div><h4>' + esc(category.label) + '</h4><p>' + esc(category.note || '') + '</p></div></div>' +
           '<div class="api-source-list" data-api-category="' + esc(category.id) + '">';
-        (category.items || []).forEach(function (item) {
+        items.forEach(function (item) {
           html += '<div class="api-source-card" draggable="true" data-api-drag="1" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '">' +
             '<div class="api-source-card__handle" aria-hidden="true">drag</div>' +
             '<div class="api-source-card__body">' +

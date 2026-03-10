@@ -206,6 +206,19 @@ const unknown = Engine.selectSectorMetadataFromProviders('ZZZZ', null, null, nul
 assert.strictEqual(unknown.normalizedSectorGroup, 'Other / Unknown');
 assert.ok(unknown.reasonIfUnavailable || unknown.reason);
 
+// Stock fallback: when sector is unknown, finnhubIndustry should still map sector.
+const finnhubIndustryFallback = classify('AAPL', {
+  rawAssetType: 'Common Stock',
+  rawSector: 'Other / Unknown',
+  rawIndustry: 'Technology',
+  finnhubIndustry: 'Technology',
+  rawName: 'Apple Inc'
+});
+assert.strictEqual(finnhubIndustryFallback.assetType, 'stock');
+assert.strictEqual(finnhubIndustryFallback.normalizedSectorGroup, 'Technology');
+assert.notStrictEqual(finnhubIndustryFallback.normalizedSectorGroup, 'Other / Unknown');
+hasClassifierMeta(finnhubIndustryFallback);
+
 // Version/quality-based cache reclassification guard.
 assert.strictEqual(Engine.shouldReclassifyCachedRecord(null, Engine.CLASSIFICATION_VERSION), true);
 assert.strictEqual(Engine.shouldReclassifyCachedRecord({

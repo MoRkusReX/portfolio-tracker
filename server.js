@@ -1,8 +1,10 @@
 // Server entrypoint that serves the app, proxies external APIs, and owns SQLite-backed shared persistence.
 // Reads local config files and serves static assets.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { pathToFileURL } = require('url');
+const { execFileSync, execFile } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -88,7 +90,7 @@ let newsCachePruneState = { lastRunAt: 0, running: null };
 let fundamentalsCachePruneState = { lastRunAt: 0, running: null };
 const linkPreviewCheckCache = new Map();
 
-app.use(cors({ origin: true, methods: ['GET', 'PUT', 'OPTIONS'] }));
+app.use(cors({ origin: true, methods: ['GET', 'PUT', 'POST', 'OPTIONS'] }));
 app.use(express.json({ limit: '1mb' }));
 
 // Shared axios config for external requests.
@@ -377,6 +379,88 @@ function parseCsv(text) {
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// Executes a child process command and resolves with stdout/stderr.
+function execFileAsync(command, args, options) {
+  return new Promise((resolve, reject) => {
+    execFile(command, Array.isArray(args) ? args : [], options || {}, (err, stdout, stderr) => {
+      if (err) {
+        const wrapped = new Error(String((stderr || err.message || 'Command failed')).trim() || 'Command failed');
+        wrapped.cause = err;
+        return reject(wrapped);
+      }
+      resolve({
+        stdout: String(stdout || ''),
+        stderr: String(stderr || '')
+      });
+    });
+  });
+}
+
+// Resolves a local Chrome/Chromium executable for headless PDF rendering.
+async function resolveChromeBinary() {
+  const candidates = [
+    String(process.env.CHROME_BIN || '').trim(),
+    'google-chrome',
+    'google-chrome-stable',
+    'chromium-browser',
+    'chromium'
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await execFileAsync(candidate, ['--version'], { timeout: 4000, maxBuffer: 1024 * 1024 });
+      return candidate;
+    } catch (err) {
+      // Try next candidate.
+    }
+  }
+  return '';
+}
+
+// Normalizes an arbitrary download filename to a safe basename.
+function sanitizeDownloadName(raw, fallback) {
+  const base = String(raw || '').trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_');
+  const cleaned = base.replace(/^-+|-+$/g, '');
+  return cleaned || String(fallback || 'download');
+}
+
+// Renders one HTML document to a PDF buffer using headless Chrome.
+async function renderPdfBufferFromHtml(chromeBin, html, filenameBase) {
+  const htmlText = String(html || '');
+  if (!htmlText.trim()) throw new Error('Missing html content');
+  const htmlSize = Buffer.byteLength(htmlText, 'utf8');
+  if (htmlSize > 2 * 1024 * 1024) throw new Error('HTML payload too large');
+
+  const tmpRoot = path.join(os.tmpdir(), 'marketpilot-analysis-export');
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  const tmpDir = fs.mkdtempSync(path.join(tmpRoot, 'single-'));
+  try {
+    const safeBase = sanitizeDownloadName(filenameBase, 'panel').replace(/\.pdf$/i, '');
+    const htmlPath = path.join(tmpDir, `${safeBase}.html`);
+    const pdfPath = path.join(tmpDir, `${safeBase}.pdf`);
+    fs.writeFileSync(htmlPath, htmlText, 'utf8');
+    const htmlUrl = pathToFileURL(htmlPath).href;
+    const chromeArgs = [
+      '--headless=new',
+      '--disable-gpu',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--allow-file-access-from-files',
+      '--print-to-pdf-no-header',
+      `--print-to-pdf=${pdfPath}`,
+      htmlUrl
+    ];
+    await execFileAsync(chromeBin, chromeArgs, { timeout: 60000, maxBuffer: 4 * 1024 * 1024 });
+    if (!fs.existsSync(pdfPath) || fs.statSync(pdfPath).size < 1024) {
+      throw new Error('PDF render failed');
+    }
+    return fs.readFileSync(pdfPath);
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (err) {}
+  }
 }
 
 // Converts a Twelve Data quote row into the quote shape expected by the UI.
@@ -2123,6 +2207,114 @@ app.get('/api/generic', async (req, res) => {
     res.status(response.status).send(response.data);
   } catch (err) {
     res.status(500).json({ error: err.message || 'Generic proxy failed' });
+  }
+});
+
+// POST /api/export-panel-pdf
+// Accepts one pre-rendered export HTML payload and returns the generated PDF.
+app.post('/api/export-panel-pdf', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const filename = sanitizeDownloadName(body.filename, 'panel-export.pdf').replace(/\.pdf$/i, '') + '.pdf';
+  const html = String(body.html || '');
+  if (!html.trim()) {
+    return res.status(400).json({ error: 'missing_html', detail: 'Expected html content' });
+  }
+  const chromeBin = await resolveChromeBinary();
+  if (!chromeBin) {
+    return res.status(500).json({ error: 'chrome_not_found', detail: 'Chrome/Chromium is required for PDF export on server' });
+  }
+  try {
+    const pdfBuffer = await renderPdfBufferFromHtml(chromeBin, html, filename);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return res.status(500).json({
+      error: 'panel_export_failed',
+      detail: String(err && err.message || 'Failed to build panel PDF').slice(0, 240)
+    });
+  }
+});
+
+// POST /api/export-analysis-zip
+// Accepts pre-rendered panel export HTML payloads, renders PDF files via headless Chrome, zips them, and returns the ZIP.
+app.post('/api/export-analysis-zip', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const files = Array.isArray(body.files) ? body.files : [];
+  if (!files.length) {
+    return res.status(400).json({ error: 'missing_files', detail: 'Expected files[] with panel HTML payloads' });
+  }
+  if (files.length > 4) {
+    return res.status(400).json({ error: 'too_many_files', detail: 'A maximum of 4 files is supported' });
+  }
+
+  const chromeBin = await resolveChromeBinary();
+  if (!chromeBin) {
+    return res.status(500).json({ error: 'chrome_not_found', detail: 'Chrome/Chromium is required for PDF export on server' });
+  }
+
+  const zipBaseName = sanitizeDownloadName(body.zipFilename, 'MarketPilot_analysis.zip').replace(/\.zip$/i, '') + '.zip';
+  const tmpRoot = path.join(os.tmpdir(), 'marketpilot-analysis-export');
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  const tmpDir = fs.mkdtempSync(path.join(tmpRoot, 'bundle-'));
+
+  try {
+    const pdfPaths = [];
+    for (let i = 0; i < files.length; i += 1) {
+      const item = files[i] && typeof files[i] === 'object' ? files[i] : {};
+      const fileHtml = String(item.html || '');
+      if (!fileHtml.trim()) {
+        throw new Error(`Missing html content for file index ${i}`);
+      }
+      const htmlSize = Buffer.byteLength(fileHtml, 'utf8');
+      if (htmlSize > 2 * 1024 * 1024) {
+        throw new Error(`HTML payload too large for file index ${i}`);
+      }
+
+      const pdfName = sanitizeDownloadName(item.filename, `panel-${i + 1}.pdf`).replace(/\.pdf$/i, '') + '.pdf';
+      const htmlPath = path.join(tmpDir, `panel-${i + 1}.html`);
+      const pdfPath = path.join(tmpDir, pdfName);
+      fs.writeFileSync(htmlPath, fileHtml, 'utf8');
+
+      const htmlUrl = pathToFileURL(htmlPath).href;
+      const chromeArgs = [
+        '--headless=new',
+        '--disable-gpu',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--allow-file-access-from-files',
+        '--print-to-pdf-no-header',
+        `--print-to-pdf=${pdfPath}`,
+        htmlUrl
+      ];
+      await execFileAsync(chromeBin, chromeArgs, { timeout: 60000, maxBuffer: 4 * 1024 * 1024 });
+      if (!fs.existsSync(pdfPath) || fs.statSync(pdfPath).size < 1024) {
+        throw new Error(`PDF render failed for ${pdfName}`);
+      }
+      pdfPaths.push(pdfPath);
+    }
+
+    const zipPath = path.join(tmpDir, zipBaseName);
+    await execFileAsync('zip', ['-j', '-q', zipPath].concat(pdfPaths), { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+    if (!fs.existsSync(zipPath) || fs.statSync(zipPath).size <= 0) {
+      throw new Error('ZIP generation failed');
+    }
+
+    const zipBuffer = fs.readFileSync(zipPath);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipBaseName}"`);
+    return res.status(200).send(zipBuffer);
+  } catch (err) {
+    return res.status(500).json({
+      error: 'analysis_export_failed',
+      detail: String(err && err.message || 'Failed to build analysis export').slice(0, 240)
+    });
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (err) {
+      // Ignore cleanup errors.
+    }
   }
 });
 

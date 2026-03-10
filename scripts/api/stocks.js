@@ -575,6 +575,79 @@
           .catch(function () { return runSequential(order, runner, nextIdx + 1); });
       }
 
+      function mergeYahooExtras(baseQuote) {
+        function withTwelveDataPremarketFallback(quoteInput) {
+          var quoteBase = Object.assign({}, quoteInput || {});
+          if (isFinite(Number(quoteBase.preMarketPrice))) return Promise.resolve(quoteBase);
+
+          var sourceText = String(quoteBase.source || '').toLowerCase();
+          // TwelveData quote has no explicit pre-market field; use latest quote as fallback.
+          if (sourceText.indexOf('twelvedata') >= 0) {
+            var tdInlinePrice = isFinite(Number(quoteBase.regularMarketPrice))
+              ? Number(quoteBase.regularMarketPrice)
+              : (isFinite(Number(quoteBase.price)) ? Number(quoteBase.price) : null);
+            if (isFinite(Number(tdInlinePrice)) && Number(tdInlinePrice) > 0) {
+              quoteBase.preMarketPrice = Number(tdInlinePrice);
+            }
+            return Promise.resolve(quoteBase);
+          }
+
+          if (!options.twelveDataPremarketFallback) return Promise.resolve(quoteBase);
+          if (!PT.StocksMarketData || typeof PT.StocksMarketData.getQuote !== 'function') return Promise.resolve(quoteBase);
+
+          var providerSymbol = String(asset && (asset.yahooSymbol || asset.symbol) || '').trim().toUpperCase();
+          if (!providerSymbol) return Promise.resolve(quoteBase);
+
+          return PT.StocksMarketData.getQuote(providerSymbol, {
+            force: !!options.force,
+            reason: 'premarket-fallback'
+          }).then(function (tdQuote) {
+            var tdPrice = tdQuote && isFinite(Number(tdQuote.price))
+              ? Number(tdQuote.price)
+              : (tdQuote && isFinite(Number(tdQuote.regularMarketPrice)) ? Number(tdQuote.regularMarketPrice) : null);
+            if (!(isFinite(Number(tdPrice)) && Number(tdPrice) > 0)) return quoteBase;
+            quoteBase.preMarketPrice = Number(tdPrice);
+            return quoteBase;
+          }).catch(function () {
+            return quoteBase;
+          });
+        }
+
+        if (options.skipYahooExtras) {
+          return withTwelveDataPremarketFallback(baseQuote);
+        }
+        return getYahooQuoteExtras(asset).then(function (extras) {
+          if (!extras || typeof extras !== 'object') {
+            return withTwelveDataPremarketFallback(Object.assign({}, baseQuote || {}, {
+              sessionExtrasCheckedAt: Date.now()
+            }));
+          }
+          var merged = Object.assign({}, baseQuote || {});
+          if (!isFinite(Number(merged.regularMarketPrice)) && isFinite(Number(merged.price))) {
+            merged.regularMarketPrice = Number(merged.price);
+          }
+          [
+            'preMarketPrice',
+            'preMarketChange',
+            'preMarketChangePercent',
+            'postMarketPrice',
+            'postMarketChange',
+            'postMarketChangePercent',
+            'regularMarketPrice',
+            'regularMarketPreviousClose'
+          ].forEach(function (field) {
+            var value = Number(extras[field]);
+            if (isFinite(value)) merged[field] = value;
+          });
+          merged.sessionExtrasCheckedAt = Date.now();
+          return withTwelveDataPremarketFallback(merged);
+        }).catch(function () {
+          return withTwelveDataPremarketFallback(Object.assign({}, baseQuote || {}, {
+            sessionExtrasCheckedAt: Date.now()
+          }));
+        });
+      }
+
       function runStooqQuote() {
         var stooqSymbol = normalizeStooqSymbol(asset);
         var url = 'https://stooq.com/q/l/?s=' + encodeURIComponent(stooqSymbol) + '&f=sd2t2ohlcv&h&e=csv';
@@ -625,11 +698,20 @@
       if (options.skipYahooFallback) {
         ordered = ordered.filter(function (sourceId) { return sourceId !== 'yahoo'; });
       }
+      var selectedSource = '';
       return runSequential(ordered, function (sourceId) {
+        selectedSource = sourceId;
         if (sourceId === 'twelvedata') return runTwelveDataQuote();
         if (sourceId === 'yahoo') return runYahooQuote();
         return runStooqQuote();
-      }, 0);
+      }, 0).then(function (quote) {
+        if (selectedSource === 'yahoo') {
+          return Object.assign({}, quote || {}, {
+            sessionExtrasCheckedAt: Date.now()
+          });
+        }
+        return mergeYahooExtras(quote);
+      });
     },
     getHistory: function (asset, limit) {
       function runSequential(order, runner, idx) {

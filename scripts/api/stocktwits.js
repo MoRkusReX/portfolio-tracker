@@ -39,6 +39,12 @@
     return 'https://nitter.net/search?f=tweets&q=' + encodeURIComponent(q);
   }
 
+  function redditSearchLink(asset) {
+    var ticker = String(asset && asset.symbol || '').trim().toUpperCase();
+    if (!ticker) return null;
+    return 'https://www.reddit.com/search/?q=' + encodeURIComponent('$' + ticker);
+  }
+
   function fetchJson(url) {
     return fetch(url, { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -52,14 +58,17 @@
 
   PT.TwitterAPI = {
     getPlaceholder: function (asset) {
+      var redditLink = redditSearchLink(asset);
+      var links = [
+        { label: 'Open Stocktwits', href: stocktwitsLink(asset) },
+        { label: 'Open Nitter', href: nitterLink(asset) }
+      ];
+      if (redditLink) links.push({ label: 'Reddit Search', href: redditLink });
       return {
         status: 'placeholder',
         searchUrl: stocktwitsLink(asset),
         linkLabel: 'Open Stocktwits',
-        links: [
-          { label: 'Open Stocktwits', href: stocktwitsLink(asset) },
-          { label: 'Open Nitter', href: nitterLink(asset) }
-        ],
+        links: links,
         message: ''
       };
     },
@@ -79,14 +88,18 @@
           return cleanText((user ? user + ': ' : '') + body);
         }).filter(Boolean);
 
+        var redditLink = redditSearchLink(asset);
+        var links = [
+          { label: 'Open Stocktwits', href: stocktwitsLink(asset) },
+          { label: 'Open Nitter', href: nitterLink(asset) }
+        ];
+        if (redditLink) links.push({ label: 'Reddit Search', href: redditLink });
+
         return {
           status: 'proxy',
           searchUrl: stocktwitsLink(asset),
           linkLabel: 'Open Stocktwits',
-          links: [
-            { label: 'Open Stocktwits', href: stocktwitsLink(asset) },
-            { label: 'Open Nitter', href: nitterLink(asset) }
-          ],
+          links: links,
           items: items,
           message: items.length
             ? (useLocalProxy() ? 'Loaded via Local Proxy (Stocktwits).' : 'Loaded directly from Stocktwits.')

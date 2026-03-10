@@ -54,7 +54,7 @@
         <div class="topbar__group topbar__group--actions">
           <button id="cryptoParticlesToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle particles background">Particles On</button>
           <button id="uiTransparencyToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle UI transparency">Transparent Off</button>
-          <button id="apiSourcesBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Open API source settings" onclick="if(window.PT&&typeof window.PT.forceOpenApiSourcesModal==='function'){window.PT.forceOpenApiSourcesModal();}">API Sources</button>
+          <button id="apiSourcesBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Open API source settings" onclick="if(window.PT&&typeof window.PT.openApiSourcesModal!=='function'&&typeof window.PT.forceOpenApiSourcesModal==='function'){window.PT.forceOpenApiSourcesModal();}">API Sources</button>
           <button id="demoModeToggle" class="btn btn--ghost btn--tiny btn--icon" type="button" aria-label="Toggle demo portfolio mode" title="Switch to demo holdings ($1,000 per position)">
             <span class="btn__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false"><path d="M9 3h6M10 3v3.2l-4.2 6.5a5 5 0 0 0 4.2 7.8h4a5 5 0 0 0 4.2-7.8L14 6.2V3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.6 14h6.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -83,6 +83,11 @@
           <button id="themeToggle" class="btn btn--ghost btn--icon" type="button" aria-label="Dark theme" title="Switch to light theme">
             <span class="btn__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false"><path d="M14.5 3.5a8 8 0 1 0 6 13.5A9 9 0 1 1 14.5 3.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+            </span>
+          </button>
+          <button id="exportAnalysisBtn" class="btn btn--ghost btn--icon" type="button" aria-label="Export analysis PDF" title="Export analysis PDF">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="3.8" width="14" height="16.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 8.3h7.6M8.2 11.5h5.6M8.2 14.7h7.6M8.2 17.9h4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             </span>
           </button>
           <button id="exportBtn" class="btn btn--ghost btn--icon" type="button" aria-label="Export portfolio" title="Export portfolio">
@@ -204,6 +209,7 @@
                   <button id="allocationModeStocksBtn" class="btn btn--tiny btn--ghost is-active" type="button" aria-pressed="true">Stocks</button>
                   <button id="allocationModeSectorsBtn" class="btn btn--tiny btn--ghost" type="button" aria-pressed="false">Sectors</button>
                 </div>
+                <button id="allocationResetSectorsBtn" class="btn btn--ghost btn--tiny hidden" type="button" data-panel-reset-sectors="1" title="Switch to Sectors mode to reset custom sectors">Reset sectors</button>
                 <button id="openAllocationPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open allocation in large view" title="Open large view">
                   <span class="btn__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -270,13 +276,14 @@
         <div class="section-header">
           <div>
             <h3>Indicators</h3>
-            <div id="indicatorsAssetLabel" class="muted">No asset selected</div>
           </div>
-          <button id="openIndicatorsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open indicators in large view" title="Open large view">
-            <span class="btn__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-          </button>
+          <div class="indicator-explorer-head-actions">
+            <button id="openIndicatorsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open indicators in large view" title="Open large view">
+              <span class="btn__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+            </button>
+          </div>
         </div>
         <section class="panel-block panel-block--indicators">
           <div class="panel-block__head">
@@ -293,13 +300,14 @@
         <div class="section-header">
           <div>
             <h3>Fundamentals</h3>
-            <div id="fundamentalsAssetLabel" class="muted">No asset selected</div>
           </div>
-          <button id="openFundamentalsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open fundamentals in large view" title="Open large view">
-            <span class="btn__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-          </button>
+          <div class="indicator-explorer-head-actions">
+            <button id="openFundamentalsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open fundamentals in large view" title="Open large view">
+              <span class="btn__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+            </button>
+          </div>
         </div>
         <section class="panel-block panel-block--fundamentals">
           <div class="panel-block__head">
@@ -350,7 +358,6 @@
         <div class="section-header">
           <div>
             <h3>News</h3>
-            <div class="muted">Market headlines and selected asset feed</div>
           </div>
           <button id="openNewsPanelBtn" class="btn btn--ghost btn--tiny btn--icon panel-expand-btn" type="button" aria-label="Open news in large view" title="Open large view">
             <span class="btn__icon" aria-hidden="true">
@@ -524,6 +531,28 @@
     </div>
   </div>
 
+  <div id="portfolioDeleteModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close-portfolio-delete-modal="1"></div>
+    <div class="modal__dialog modal__dialog--portfolio-delete glass" role="dialog" aria-modal="true" aria-labelledby="portfolioDeleteModalTitle">
+      <div class="modal__header">
+        <div>
+          <h3 id="portfolioDeleteModalTitle">Delete Portfolio</h3>
+          <div id="portfolioDeleteModeLabel" class="muted portfolio-name-modal__subtitle">Stocks portfolio</div>
+        </div>
+        <button id="portfolioDeleteModalCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="portfolio-delete-modal__body">
+        <p id="portfolioDeleteModalMessage" class="muted">
+          This removes only assets in this portfolio. It does not delete symbols globally.
+        </p>
+      </div>
+      <div class="modal__actions portfolio-delete-modal__actions">
+        <button type="button" id="portfolioDeleteCancelBtn" class="btn btn--ghost">Cancel</button>
+        <button type="button" id="portfolioDeleteConfirmBtn" class="btn btn--danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <div id="sectorEditModal" class="modal hidden" aria-hidden="true">
     <div class="modal__backdrop" data-close-sector-edit-modal="1"></div>
     <div class="modal__dialog modal__dialog--sector-editor glass" role="dialog" aria-modal="true" aria-labelledby="sectorEditModalTitle">
@@ -604,7 +633,14 @@
           <h3 id="indicatorExplorerTitle">Indicator Explorer</h3>
           <div class="muted">Check indicators for stocks and crypto outside your portfolio.</div>
         </div>
-        <button id="indicatorExplorerCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+        <div class="indicator-explorer-head-actions">
+          <button id="indicatorExplorerExportAnalysisBtn" class="btn btn--ghost btn--tiny btn--icon" type="button" aria-label="Export analysis PDF" title="Select an asset to export analysis PDF" disabled>
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="3.8" width="14" height="16.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 8.3h7.6M8.2 11.5h5.6M8.2 14.7h7.6M8.2 17.9h4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </span>
+          </button>
+          <button id="indicatorExplorerCloseBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Close">✕</button>
+        </div>
       </div>
       <div class="modal__form">
         <div class="mode-switch mode-switch--topbar" role="tablist" aria-label="Indicator explorer type">
@@ -705,7 +741,7 @@
                   <div id="indicatorExplorerChartMeta" class="muted">Search for an asset to load its chart.</div>
                 </div>
                 <div class="indicator-explorer-head-actions">
-                  <a id="indicatorExplorerChartTradingViewBtn" class="btn btn--ghost btn--tiny" href="#" target="_blank" rel="noopener noreferrer" aria-label="Open TradingView chart">Open TradingView</a>
+                  <a id="indicatorExplorerChartTradingViewBtn" class="btn btn--ghost btn--tiny indicator-explorer-tv-link" href="#" target="_blank" rel="noopener noreferrer" aria-label="Open TradingView chart">View on TradingView ↗</a>
                 </div>
               </div>
               <div id="indicatorExplorerChartTimeframes" class="chart-timeframes chart-timeframes--explorer" role="group" aria-label="Explorer chart timeframe"></div>
@@ -930,10 +966,10 @@
             '<div class="api-config-section__head"><div><h4>' + esc(category.label) + '</h4><p>' + esc(category.note || '') + '</p></div></div>' +
             '<div class="api-source-list" data-api-category="' + esc(category.id) + '">';
           items.forEach(function (item) {
-            html += '<div class="api-source-card" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '">' +
+            html += '<div class="api-source-card" draggable="true" data-api-drag="1" data-api-category="' + esc(category.id) + '" data-api-source="' + esc(item.id) + '">' +
               '<div class="api-source-card__handle" aria-hidden="true">drag</div>' +
               '<div class="api-source-card__body">' +
-                '<div class="api-source-card__title"><strong>' + esc(item.label) + '</strong>' + (item.requiresKey ? '<span class="api-source-badge">API Key</span>' : '') + '</div>' +
+                '<div class="api-source-card__title"><strong>' + esc(item.label) + '</strong>' + (item.requiresKey ? '<span class="api-source-badge api-source-badge--key">API Key</span>' : '') + '</div>' +
                 '<div class="api-source-card__meta">' + esc(item.assetScope || '') + '</div>' +
               '</div>' +
               '<label class="api-toggle">' +
@@ -950,6 +986,10 @@
       }
 
       PT.forceOpenApiSourcesModal = function (mode) {
+        if (typeof PT.openApiSourcesModal === 'function') {
+          PT.openApiSourcesModal(mode);
+          return;
+        }
         var modal = document.getElementById('apiSourcesModal');
         var content = document.getElementById('apiSourcesContent');
         var selectedMode = mode === 'crypto' ? 'crypto' : (mode === 'stocks' ? 'stocks' : (((PT.State && PT.State.app && PT.State.app.mode) === 'crypto') ? 'crypto' : (PT.__apiSourcesModalMode || 'stocks')));

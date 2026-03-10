@@ -31,6 +31,7 @@
   var INDICATOR_EXPLORER_SEARCH_TIMER = null;
   var EXPLORER_CACHE_RETENTION_MS = 1000 * 60 * 60 * 24 * 10;
   var EXPLORER_FAVORITES_LOCAL_CACHE_KEY = 'explorer:favorites:local';
+  var INDICATOR_EXPLORER_FAVORITES_STALE_MS = 1000 * 60 * 5;
   var INDICATOR_EXPLORER_NOTE_MAX_LEN = 280;
   var SECTOR_METADATA_TTL_MS = 1000 * 60 * 60 * 24 * 30;
   var SECTOR_META_CACHE_PREFIX = 'sector:stock:';
@@ -104,6 +105,22 @@
   var SECTOR_RESET_CONFIRM = {
     pending: null,
     count: 0
+  };
+  var PORTFOLIO_DELETE_CONFIRM = {
+    pending: null,
+    mode: 'stocks',
+    name: '',
+    assetCount: 0
+  };
+  var API_DEBUG_DRAG = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0
   };
   var AUTO_COLORS = ['#2cb6ff', '#14f1b2', '#f59e0b', '#fb7185', '#8b5cf6', '#22c55e', '#f97316', '#38bdf8', '#eab308', '#a78bfa'];
   var DEMO_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'AVGO', 'TSLA'];
@@ -394,6 +411,7 @@
             label: source.label,
             enabled: pref.enabled !== false,
             requiresKey: !!source.requiresKey,
+            assetTypes: Array.isArray(source.assetTypes) ? source.assetTypes.slice() : [],
             assetScope: Array.isArray(source.assetTypes)
               ? (source.assetTypes.length > 1 ? 'Stocks + Crypto' : (source.assetTypes[0] === 'crypto' ? 'Crypto' : 'Stocks'))
               : 'All'
@@ -405,10 +423,11 @@
 
   function refreshApiSourcesModal() {
     if (!ui || !ui.el || !ui.el.apiSourcesModal || ui.el.apiSourcesModal.classList.contains('hidden')) return;
-    if (window.PT && typeof window.PT.forceOpenApiSourcesModal === 'function') {
-      window.PT.forceOpenApiSourcesModal(window.PT.__apiSourcesModalMode || (state.app.mode === 'crypto' ? 'crypto' : 'stocks'));
-      return;
-    }
+    var selectedMode = (window.PT && window.PT.__apiSourcesModalMode) === 'crypto'
+      ? 'crypto'
+      : ((window.PT && window.PT.__apiSourcesModalMode) === 'stocks'
+        ? 'stocks'
+        : (state.app.mode === 'crypto' ? 'crypto' : 'stocks'));
     ui.renderApiSourcesConfig({
       categories: apiSourceCategoryView(),
       autoRefresh: {
@@ -420,15 +439,16 @@
           enabled: !!state.app.cryptoAutoRefreshEnabled,
           intervalSec: state.app.cryptoAutoRefreshIntervalSec || 600
         }
-      }
+      },
+      selectedMode: selectedMode
     });
   }
 
   function openApiSourcesModal(mode) {
-    if (window.PT && typeof window.PT.forceOpenApiSourcesModal === 'function') {
-      window.PT.forceOpenApiSourcesModal(mode || window.PT.__apiSourcesModalMode || (state.app.mode === 'crypto' ? 'crypto' : 'stocks'));
-      return;
-    }
+    var selectedMode = mode === 'crypto'
+      ? 'crypto'
+      : (mode === 'stocks' ? 'stocks' : (((window.PT && window.PT.__apiSourcesModalMode) === 'crypto') ? 'crypto' : (state.app.mode === 'crypto' ? 'crypto' : 'stocks')));
+    if (window.PT) window.PT.__apiSourcesModalMode = selectedMode;
     var modalEl = document.getElementById('apiSourcesModal');
     var contentEl = document.getElementById('apiSourcesContent');
     if (ui && ui.el) {
@@ -453,7 +473,7 @@
               intervalSec: state.app.cryptoAutoRefreshIntervalSec || 600
             }
           },
-          selectedMode: mode || (state.app.mode === 'crypto' ? 'crypto' : 'stocks')
+          selectedMode: selectedMode
         });
       } else if (contentEl) {
         contentEl.innerHTML = '<section class="api-config-section"><div class="api-config-section__head"><div><h4>API source settings unavailable</h4><p>UI layer not initialized.</p></div></div></section>';
@@ -1423,6 +1443,7 @@
       }
       state.app.demoModeEnabled = !!savedSettings.demoModeEnabled;
       state.app.apiDebugEnabled = !!savedSettings.apiDebugEnabled;
+      state.app.apiDebugPanelPosition = normalizeApiDebugPanelPosition(savedSettings.apiDebugPanelPosition);
       state.app.apiSourcePrefs = apiSourceHelpers && typeof apiSourceHelpers.normalizePrefs === 'function'
         ? apiSourceHelpers.normalizePrefs(savedSettings.apiSourcePrefs)
         : (savedSettings.apiSourcePrefs || state.app.apiSourcePrefs);
@@ -1441,6 +1462,12 @@
       if (!state.app.selectedStocksKey && !state.app.selectedCryptoKey && savedSettings.selectedKey) {
         if (String(savedSettings.selectedKey).indexOf('crypto:') === 0) state.app.selectedCryptoKey = savedSettings.selectedKey;
         else state.app.selectedStocksKey = savedSettings.selectedKey;
+      }
+      if (savedSettings.indicatorExplorerFavoritesSort && typeof savedSettings.indicatorExplorerFavoritesSort === 'object') {
+        INDICATOR_EXPLORER.favoritesSort = {
+          key: normalizeIndicatorExplorerFavoritesSortKey(savedSettings.indicatorExplorerFavoritesSort.key),
+          dir: normalizeIndicatorExplorerFavoritesSortDir(savedSettings.indicatorExplorerFavoritesSort.dir)
+        };
       }
       state.app.selectedKey = getStoredSelectionForMode(state.app.mode);
       if (!savedSettings.apiSourcePrefs && Object.prototype.hasOwnProperty.call(savedSettings, 'twelveDataEnabled')) {
@@ -2344,6 +2371,47 @@
     return code.replace(/_/g, ' ');
   }
 
+  function buildUnavailableFundamentalsPanel(asset, message) {
+    var isCrypto = !!(asset && asset.type === 'crypto');
+    var safeMessage = String(message || 'Fundamentals unavailable.').trim() || 'Fundamentals unavailable.';
+    return {
+      title: isCrypto ? 'Token Fundamentals' : 'Fundamentals',
+      label: 'n/a',
+      qualityLabel: 'n/a',
+      valuationLabel: 'n/a',
+      qualityScore: 0,
+      qualityScoreOutOf: 0,
+      score: 0,
+      scoreOutOf: 0,
+      valuationSummaryText: 'n/a',
+      note: safeMessage,
+      reasons: [safeMessage],
+      reasonGroups: [
+        {
+          id: 'coverage',
+          title: 'Data coverage',
+          items: [safeMessage]
+        }
+      ],
+      sections: [
+        {
+          id: 'coverage',
+          title: 'Data Coverage',
+          metrics: [
+            {
+              id: 'fundamentals-coverage',
+              label: 'Fundamentals Coverage',
+              value: null,
+              display: 'n/a',
+              status: 'n/a',
+              reasonIfUnavailable: safeMessage
+            }
+          ]
+        }
+      ]
+    };
+  }
+
   // Detects old crypto FA snapshots that predate market-cap band classification.
   function cryptoFundamentalsNeedsMarketCapRefresh(snapshot) {
     var panel = snapshot && snapshot.panel;
@@ -2665,6 +2733,7 @@
       uiTransparencyEnabled: !!state.app.uiTransparencyEnabled,
       demoModeEnabled: !!state.app.demoModeEnabled,
       apiDebugEnabled: !!state.app.apiDebugEnabled,
+      apiDebugPanelPosition: normalizeApiDebugPanelPosition(state.app.apiDebugPanelPosition),
       twelveDataEnabled: !!state.app.twelveDataEnabled,
       apiSourcePrefs: state.app.apiSourcePrefs,
       newsScopeStocks: state.app.newsScopeStocks === 'selected' ? 'selected' : 'general',
@@ -2679,8 +2748,44 @@
       mode: state.app.mode,
       selectedKey: state.app.selectedKey,
       selectedStocksKey: state.app.selectedStocksKey || null,
-      selectedCryptoKey: state.app.selectedCryptoKey || null
+      selectedCryptoKey: state.app.selectedCryptoKey || null,
+      indicatorExplorerFavoritesSort: {
+        key: normalizeIndicatorExplorerFavoritesSortKey(INDICATOR_EXPLORER && INDICATOR_EXPLORER.favoritesSort && INDICATOR_EXPLORER.favoritesSort.key),
+        dir: normalizeIndicatorExplorerFavoritesSortDir(INDICATOR_EXPLORER && INDICATOR_EXPLORER.favoritesSort && INDICATOR_EXPLORER.favoritesSort.dir)
+      }
     };
+  }
+
+  // Builds export payload for explorer state (favorites + favorites sort).
+  function buildIndicatorExplorerExportPayload() {
+    return {
+      favorites: normalizeIndicatorExplorerFavorites(INDICATOR_EXPLORER && INDICATOR_EXPLORER.favorites),
+      favoritesSort: {
+        key: normalizeIndicatorExplorerFavoritesSortKey(INDICATOR_EXPLORER && INDICATOR_EXPLORER.favoritesSort && INDICATOR_EXPLORER.favoritesSort.key),
+        dir: normalizeIndicatorExplorerFavoritesSortDir(INDICATOR_EXPLORER && INDICATOR_EXPLORER.favoritesSort && INDICATOR_EXPLORER.favoritesSort.dir)
+      }
+    };
+  }
+
+  // Restores exported explorer state and syncs favorites to local cache/remote store.
+  function applyImportedIndicatorExplorerPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    var explorerPayload = payload.explorer && typeof payload.explorer === 'object' ? payload.explorer : null;
+    var rawFavorites = payload.explorerFavorites || payload.indicatorExplorerFavorites || (explorerPayload && explorerPayload.favorites) || null;
+    if (rawFavorites && typeof rawFavorites === 'object') {
+      var normalizedFavorites = normalizeIndicatorExplorerFavorites(rawFavorites);
+      INDICATOR_EXPLORER.favorites = normalizedFavorites;
+      INDICATOR_EXPLORER.favoritesLoaded = hasIndicatorExplorerFavorites(normalizedFavorites);
+      saveIndicatorExplorerFavoritesToLocalCache(normalizedFavorites);
+      saveIndicatorExplorerFavoritesToRemote();
+    }
+    var rawSort = payload.explorerFavoritesSort || payload.indicatorExplorerFavoritesSort || (explorerPayload && explorerPayload.favoritesSort) || null;
+    if (rawSort && typeof rawSort === 'object') {
+      INDICATOR_EXPLORER.favoritesSort = {
+        key: normalizeIndicatorExplorerFavoritesSortKey(rawSort.key),
+        dir: normalizeIndicatorExplorerFavoritesSortDir(rawSort.dir)
+      };
+    }
   }
 
   // Persists settings, cache, and the shared portfolio to their respective stores.
@@ -2775,9 +2880,10 @@
   }
 
   // Switches active portfolio for a mode and rebinds state.portfolio arrays.
-  function switchActivePortfolio(mode, portfolioId) {
+  function switchActivePortfolio(mode, portfolioId, options) {
     var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
-    syncActiveCollectionsFromPortfolioArrays();
+    var opts = options && typeof options === 'object' ? options : {};
+    if (!opts.skipSyncFromFlat) syncActiveCollectionsFromPortfolioArrays();
     setActivePortfolioIdForMode(modeKey, portfolioId);
     syncPortfolioArrayFromCollections(modeKey);
     normalizeImportedAssets();
@@ -2845,6 +2951,49 @@
     openPortfolioNameModal(mode);
   }
 
+  // Closes the delete-portfolio confirmation modal and resolves the pending decision.
+  function closePortfolioDeleteModal(confirmed) {
+    var resolver = PORTFOLIO_DELETE_CONFIRM.pending;
+    PORTFOLIO_DELETE_CONFIRM.pending = null;
+    PORTFOLIO_DELETE_CONFIRM.mode = 'stocks';
+    PORTFOLIO_DELETE_CONFIRM.name = '';
+    PORTFOLIO_DELETE_CONFIRM.assetCount = 0;
+    if (ui && ui.el && ui.el.portfolioDeleteModal) {
+      ui.el.portfolioDeleteModal.classList.add('hidden');
+      ui.el.portfolioDeleteModal.setAttribute('aria-hidden', 'true');
+    }
+    if (typeof resolver === 'function') resolver(!!confirmed);
+  }
+
+  // Opens a styled delete-portfolio confirmation modal.
+  function requestPortfolioDeleteConfirmation(mode, name, assetCount) {
+    var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
+    var safeName = String(name || 'this portfolio').trim() || 'this portfolio';
+    var count = Math.max(0, Number(assetCount) || 0);
+    if (!ui || !ui.el || !ui.el.portfolioDeleteModal) {
+      return Promise.resolve(window.confirm('Delete portfolio "' + safeName + '"? This removes its assets only.'));
+    }
+    if (typeof PORTFOLIO_DELETE_CONFIRM.pending === 'function') {
+      closePortfolioDeleteModal(false);
+    }
+    PORTFOLIO_DELETE_CONFIRM.mode = modeKey;
+    PORTFOLIO_DELETE_CONFIRM.name = safeName;
+    PORTFOLIO_DELETE_CONFIRM.assetCount = count;
+    if (ui.el.portfolioDeleteModeLabel) {
+      ui.el.portfolioDeleteModeLabel.textContent = (modeKey === 'crypto' ? 'Crypto' : 'Stocks') + ' portfolio';
+    }
+    if (ui.el.portfolioDeleteModalMessage) {
+      ui.el.portfolioDeleteModalMessage.textContent =
+        'Delete "' + safeName + '"? This removes ' + count + ' asset' + (count === 1 ? '' : 's') + ' from this portfolio only.';
+    }
+    ui.el.portfolioDeleteModal.classList.remove('hidden');
+    ui.el.portfolioDeleteModal.setAttribute('aria-hidden', 'false');
+    if (ui.el.portfolioDeleteConfirmBtn) ui.el.portfolioDeleteConfirmBtn.focus();
+    return new Promise(function (resolve) {
+      PORTFOLIO_DELETE_CONFIRM.pending = resolve;
+    });
+  }
+
   // Deletes active portfolio in a mode after confirmation; keeps at least one portfolio.
   function deleteActivePortfolioForMode(mode) {
     var modeKey = mode === 'crypto' ? 'crypto' : 'stocks';
@@ -2855,15 +3004,17 @@
     }
     var active = activePortfolioRecordForMode(modeKey);
     var name = String(active && active.name || 'this portfolio');
-    var ok = window.confirm('Delete portfolio "' + name + '"? This removes its assets only.');
-    if (!ok) return;
-    syncActiveCollectionsFromPortfolioArrays();
-    var activeId = String(active && active.id || '');
-    var filtered = list.filter(function (item) { return String(item.id) !== activeId; });
-    state.portfolioCollections[modeKey] = filtered;
-    var next = filtered[0];
-    switchActivePortfolio(modeKey, next && next.id);
-    setStatus('Deleted portfolio "' + name + '"');
+    var assetCount = Array.isArray(active && active.assets) ? active.assets.length : 0;
+    requestPortfolioDeleteConfirmation(modeKey, name, assetCount).then(function (ok) {
+      if (!ok) return;
+      syncActiveCollectionsFromPortfolioArrays();
+      var activeId = String(active && active.id || '');
+      var filtered = list.filter(function (item) { return String(item.id) !== activeId; });
+      state.portfolioCollections[modeKey] = filtered;
+      var next = filtered[0];
+      switchActivePortfolio(modeKey, next && next.id, { skipSyncFromFlat: true });
+      setStatus('Deleted portfolio "' + name + '"');
+    });
   }
 
   // Returns cached overall indicator summary (label + score) for an asset row.
@@ -2893,6 +3044,46 @@
       label: fallbackLabel ? String(fallbackLabel) : 'n/a',
       score: fallback && isFinite(Number(fallback.score)) ? Number(fallback.score) : null
     };
+  }
+
+  function tradePlanZoneMid(low, high) {
+    var zoneLow = Number(low);
+    var zoneHigh = Number(high);
+    if (!isFinite(zoneLow) || !isFinite(zoneHigh) || zoneLow <= 0 || zoneHigh <= 0 || zoneHigh < zoneLow) return null;
+    return (zoneLow + zoneHigh) / 2;
+  }
+
+  function tradeTargetSignalForAsset(asset, currentPrice) {
+    var price = Number(currentPrice);
+    if (!asset || !(price > 0)) return null;
+    var target = indicatorTargetFromAsset(asset);
+    if (!target) return null;
+    var targetKey = target.cacheKey || indicatorTargetKey(target);
+    if (!targetKey) return null;
+    var ranked = [
+      { key: '1m', label: '1M', coins: 3 },
+      { key: '1w', label: '1W', coins: 2 },
+      { key: '1d', label: '1D', coins: 1 }
+    ];
+    for (var i = 0; i < ranked.length; i++) {
+      var tf = ranked[i];
+      var snapshot = getCachedAny(indicatorComputedCacheKey(targetKey, tf.key));
+      var plan = snapshot && snapshot.values && snapshot.values.tradePlan ? snapshot.values.tradePlan : null;
+      var targetMid = tradePlanZoneMid(plan && plan.takeProfitZoneLow, plan && plan.takeProfitZoneHigh);
+      if (!(targetMid > 0)) continue;
+      var diffPct = ((targetMid - price) / price) * 100;
+      if (diffPct <= 5) {
+        return {
+          coins: tf.coins,
+          timeframe: tf.key,
+          timeframeLabel: tf.label,
+          targetMid: targetMid,
+          diffPct: diffPct,
+          aboveTarget: diffPct <= 0
+        };
+      }
+    }
+    return null;
   }
 
   // Returns cached overall indicator conclusion label for an asset row, if available.
@@ -2970,9 +3161,11 @@
   function getModeComputedItems(mode) {
     var items = getRawModeItems(mode).map(function (asset) {
       var calc = computeAsset(asset);
+      var tradeTargetSignal = tradeTargetSignalForAsset(asset, calc.price);
       return Object.assign({}, asset, calc, {
         indicatorConclusion: indicatorOverallStatusForAsset(asset),
-        qualityOverall: fundamentalsQualityStatusForAsset(asset)
+        qualityOverall: fundamentalsQualityStatusForAsset(asset),
+        tradeTargetSignal: tradeTargetSignal
       });
     });
     var s = state.app.sortBy;
@@ -3606,6 +3799,7 @@
     ui.setDemoModeToggle(!!state.app.demoModeEnabled);
     ui.setApiDebugToggle(!!state.app.apiDebugEnabled);
     ui.setApiDebugPanelVisible(!!state.app.apiDebugEnabled);
+    syncApiDebugPanelPosition();
     ui.setTwelveDataToggle(!!state.app.twelveDataEnabled);
     ui.setConnectionModeBadge();
     ui.setModeTabs(state.app.mode);
@@ -3613,6 +3807,7 @@
     syncNewsSourceSelectForMode(state.app.mode);
     ui.setSortValue(state.app.sortBy);
     ui.setAllocationModeToggle(allocationModeStocks(), state.app.mode === 'stocks');
+    syncAllocationResetSectorsButtonState();
     var items = getModeComputedItems(state.app.mode);
     ensureValidSelection(state.app.mode, items);
     setStoredSelectionForMode(state.app.mode, state.app.selectedKey);
@@ -3930,16 +4125,18 @@
         return INDICATOR_EXPLORER.favorites;
       }
       var loaded = normalizeIndicatorExplorerFavorites(record && record.favorites);
-      var merged = hasIndicatorExplorerFavorites(localFallback)
-        ? mergeIndicatorExplorerFavorites(loaded, localFallback)
-        : loaded;
-      INDICATOR_EXPLORER.favorites = merged;
+      var remoteUpdatedAt = Math.max(0, Number(record && record.updatedAt || 0) || 0);
+      var bootstrapFromLocal = !hasIndicatorExplorerFavorites(loaded) &&
+        hasIndicatorExplorerFavorites(localFallback) &&
+        remoteUpdatedAt <= 0;
+      var resolved = bootstrapFromLocal ? localFallback : loaded;
+      INDICATOR_EXPLORER.favorites = resolved;
       INDICATOR_EXPLORER.favoritesLoaded = true;
-      saveIndicatorExplorerFavoritesToLocalCache(merged);
-      if (indicatorExplorerFavoritesSignature(merged) !== indicatorExplorerFavoritesSignature(loaded)) {
+      saveIndicatorExplorerFavoritesToLocalCache(resolved);
+      if (bootstrapFromLocal) {
         saveIndicatorExplorerFavoritesToRemote();
       }
-      return merged;
+      return resolved;
     }).catch(function () {
       INDICATOR_EXPLORER.favorites = hasIndicatorExplorerFavorites(localFallback)
         ? localFallback
@@ -4078,6 +4275,7 @@
 
     function chipClass(status) {
       var v = String(status || '').toLowerCase();
+      if (!v || v === 'n/a' || v === 'na') return 'fundamentals-chip fundamentals-chip--risk-na';
       if (v === 'bullish' || v === 'healthy' || v === 'cheap' || v === 'strong') return 'fundamentals-chip fundamentals-chip--bullish';
       if (v === 'risk' || v === 'weak' || v === 'expensive' || v === 'bearish') return 'fundamentals-chip fundamentals-chip--bearish';
       return 'fundamentals-chip fundamentals-chip--neutral';
@@ -4252,6 +4450,16 @@
     var qualityScore = isFinite(Number(panel.qualityScore)) ? Number(panel.qualityScore) : (isFinite(Number(panel.score)) ? Number(panel.score) : 0);
     var qualityScoreOutOf = isFinite(Number(panel.qualityScoreOutOf)) ? Number(panel.qualityScoreOutOf) : (isFinite(Number(panel.scoreOutOf)) ? Number(panel.scoreOutOf) : null);
     var sections = Array.isArray(panel.sections) ? panel.sections : [];
+    var hasMetricValues = sections.some(function (section) {
+      var metrics = Array.isArray(section && section.metrics) ? section.metrics : [];
+      return metrics.some(function (metric) {
+        return metric && metric.value != null;
+      });
+    });
+    if (!hasMetricValues) {
+      qualityLabel = 'n/a';
+      valuationLabel = 'n/a';
+    }
     var reasons = Array.isArray(panel.reasons) ? panel.reasons : [];
     var fetchedAt = Number(payload && payload.fetchedAt || 0) || 0;
     var metaText = String(panel.note || '').trim();
@@ -4293,11 +4501,15 @@
             var reasonText = String(metric && metric.reasonIfUnavailable || '').trim();
             var explain = metricExplanation(metric);
             var metricLabel = metric && metric.label ? String(metric.label) : '';
+            var metricUnavailable = !metric || metric.value == null;
+            var metricStatus = metricUnavailable
+              ? 'n/a'
+              : (String(metric && metric.status || '').trim() || 'Neutral');
             var valueText = (metric && metric.value != null)
               ? String(metric && metric.display ? metric.display : metric.value)
               : (reasonText ? 'Unavailable' : 'n/a');
             return '<article class="fundamentals-metric">' +
-              '<div class="fundamentals-metric__head"><span class="fundamentals-metric__title" tabindex="0" data-help-tooltip="' + escapeHtml(explain) + '" aria-label="' + escapeHtml((metricLabel || 'Metric') + ' explanation') + '">' + escapeHtml(metricLabel) + '</span><span class="' + chipClass(metric && metric.status) + '">' + escapeHtml(metric && metric.status ? metric.status : 'Neutral') + '</span></div>' +
+              '<div class="fundamentals-metric__head"><span class="fundamentals-metric__title" tabindex="0" data-help-tooltip="' + escapeHtml(explain) + '" aria-label="' + escapeHtml((metricLabel || 'Metric') + ' explanation') + '">' + escapeHtml(metricLabel) + '</span><span class="' + chipClass(metricStatus) + '">' + escapeHtml(metricStatus) + '</span></div>' +
               '<strong>' + escapeHtml(valueText) + '</strong>' +
               (reasonText ? ('<small class="fundamentals-metric__reason">' + escapeHtml(reasonText) + '</small>') : '') +
             '</article>';
@@ -4356,7 +4568,6 @@
     var isCrypto = INDICATOR_EXPLORER.mode === 'crypto';
     var showingFavorites = INDICATOR_EXPLORER.view === 'favorites';
     var hasSelection = !!INDICATOR_EXPLORER.selected;
-    var isMobileLayout = window.matchMedia('(max-width: 1120px)').matches;
     if (ui.el.indicatorExplorerStocksTab) {
       ui.el.indicatorExplorerStocksTab.classList.toggle('is-active', !isCrypto);
       ui.el.indicatorExplorerStocksTab.setAttribute('aria-selected', !isCrypto ? 'true' : 'false');
@@ -4412,13 +4623,13 @@
       ? ui.el.indicatorExplorerChart.closest('.panel-block')
       : null;
     if (quickSummaryEl) {
-      if (isMobileLayout && explorerMainEl && indicatorsBlockEl) {
-        if (quickSummaryEl.parentElement !== explorerMainEl || quickSummaryEl.nextSibling !== indicatorsBlockEl) {
-          explorerMainEl.insertBefore(quickSummaryEl, indicatorsBlockEl);
-        }
-      } else if (explorerSideEl && chartBlockEl) {
+      if (explorerSideEl && chartBlockEl) {
         if (quickSummaryEl.parentElement !== explorerSideEl || quickSummaryEl.previousSibling !== chartBlockEl) {
           explorerSideEl.insertBefore(quickSummaryEl, chartBlockEl.nextSibling);
+        }
+      } else if (explorerMainEl && indicatorsBlockEl) {
+        if (quickSummaryEl.parentElement !== explorerMainEl || quickSummaryEl.nextSibling !== indicatorsBlockEl) {
+          explorerMainEl.insertBefore(quickSummaryEl, indicatorsBlockEl);
         }
       }
     }
@@ -4574,7 +4785,7 @@
       return {
         type: 'indicators',
         title: 'Indicators',
-        subtitle: (ui.el.indicatorsAssetLabel && ui.el.indicatorsAssetLabel.textContent) || 'No asset selected',
+        subtitle: '',
         source: ui.el.indicatorsPanel
       };
     }
@@ -4593,7 +4804,7 @@
       return {
         type: 'fundamentals',
         title: 'Fundamentals',
-        subtitle: (ui.el.fundamentalsAssetLabel && ui.el.fundamentalsAssetLabel.textContent) || 'No asset selected',
+        subtitle: '',
         source: ui.el.fundamentalsPanel
       };
     }
@@ -4601,7 +4812,7 @@
       return {
         type: 'news',
         title: 'News',
-        subtitle: 'Market headlines and selected asset feed',
+        subtitle: '',
         source: ui.el.newsPanel
       };
     }
@@ -4645,6 +4856,679 @@
       }
     }
     return node;
+  }
+
+  // Builds a stable default filename for analysis PDF export.
+  function analysisExportFilename(asset) {
+    function pad2(v) { return String(v).padStart(2, '0'); }
+    var now = new Date();
+    var stamp = String(now.getFullYear()) + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+      '-' + pad2(now.getHours()) + pad2(now.getMinutes());
+    var rawLabel = asset ? (asset.symbol || asset.name || '') : '';
+    if (!rawLabel) rawLabel = state.app.mode === 'crypto' ? 'crypto' : 'stocks';
+    var safeLabel = String(rawLabel).trim().toUpperCase().replace(/[^A-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!safeLabel) safeLabel = 'analysis';
+    return 'analysis-' + safeLabel + '-' + stamp + '.pdf';
+  }
+
+  // Builds a stable filename for single-panel exports.
+  function panelExportFilename(panelType, asset) {
+    function pad2(v) { return String(v).padStart(2, '0'); }
+    var now = new Date();
+    var stamp = String(now.getFullYear()) + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+      '-' + pad2(now.getHours()) + pad2(now.getMinutes());
+    var rawLabel = asset ? (asset.symbol || asset.name || '') : '';
+    if (!rawLabel) rawLabel = state.app.mode === 'crypto' ? 'crypto' : 'stocks';
+    var safeLabel = String(rawLabel).trim().toUpperCase().replace(/[^A-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!safeLabel) safeLabel = 'asset';
+    var kind = String(panelType || '').toLowerCase() === 'fundamentals' ? 'fundamentals' : 'indicators';
+    return kind + '-' + safeLabel + '-' + stamp + '.pdf';
+  }
+
+  // Builds the top-bar analysis ZIP filename: MarketPilot_[TICKER]_analysis_[DATE].zip
+  function analysisZipFilename(asset) {
+    function pad2(v) { return String(v).padStart(2, '0'); }
+    var now = new Date();
+    var dateStamp = String(now.getFullYear()) + pad2(now.getMonth() + 1) + pad2(now.getDate());
+    var rawLabel = asset ? (asset.symbol || asset.name || '') : '';
+    if (!rawLabel) rawLabel = state.app.mode === 'crypto' ? 'CRYPTO' : 'STOCKS';
+    var safeLabel = String(rawLabel).trim().toUpperCase().replace(/[^A-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!safeLabel) safeLabel = 'ASSET';
+    return 'MarketPilot_' + safeLabel + '_analysis_' + dateStamp + '.zip';
+  }
+
+  // Builds panel analysis PDF filenames:
+  // MarketPilot_[TICKER]_Indicators_Analysis_[DATETIME].pdf
+  // MarketPilot_[TICKER]_Fundamentals_Analysis_[DATETIME].pdf
+  function analysisPanelPdfFilename(asset, panelType) {
+    function pad2(v) { return String(v).padStart(2, '0'); }
+    var now = new Date();
+    var dateTime = String(now.getFullYear()) + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+      '-' + pad2(now.getHours()) + pad2(now.getMinutes());
+    var rawLabel = asset ? (asset.symbol || asset.name || '') : '';
+    if (!rawLabel) rawLabel = state.app.mode === 'crypto' ? 'CRYPTO' : 'STOCKS';
+    var safeLabel = String(rawLabel).trim().toUpperCase().replace(/[^A-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!safeLabel) safeLabel = 'ASSET';
+    var kind = String(panelType || '').toLowerCase() === 'fundamentals' ? 'Fundamentals' : 'Indicators';
+    return 'MarketPilot_' + safeLabel + '_' + kind + '_Analysis_' + dateTime + '.pdf';
+  }
+
+  // Applies a stronger indicator-like look to fundamentals clones for PDF readability.
+  function applyFundamentalsPrintBoost(panelRoot, theme) {
+    if (!panelRoot || !panelRoot.querySelectorAll) return;
+    function setImportant(el, prop, value) {
+      if (!el || !el.style) return;
+      el.style.setProperty(prop, value, 'important');
+    }
+    var isLight = String(theme || '').toLowerCase() === 'light';
+    // Dark-mode export uses stronger contrast so fundamentals don't print washed out.
+    var blockBorder = isLight ? 'rgba(15, 23, 42, 0.1)' : 'rgba(64, 134, 181, 0.42)';
+    var blockBg = isLight
+      ? 'linear-gradient(168deg, rgba(255,255,255,0.95), rgba(247,251,255,0.9)), radial-gradient(circle at 8% -45%, rgba(44,182,255,0.12), transparent 64%)'
+      : 'linear-gradient(167deg, rgba(9,23,38,0.985), rgba(7,18,31,0.985)), radial-gradient(circle at 8% -45%, rgba(44,182,255,0.22), transparent 60%)';
+    var cardBorder = isLight ? 'rgba(15, 23, 42, 0.08)' : 'rgba(83, 156, 204, 0.34)';
+    var cardBg = isLight
+      ? 'linear-gradient(170deg, rgba(255,255,255,0.9), rgba(248,252,255,0.86)), radial-gradient(circle at 14% -40%, rgba(44,182,255,0.1), transparent 64%)'
+      : 'linear-gradient(170deg, rgba(21,44,66,0.8), rgba(14,30,48,0.76)), radial-gradient(circle at 14% -40%, rgba(44,182,255,0.16), transparent 62%)';
+    var mutedColor = isLight ? 'rgba(51, 75, 98, 0.94)' : 'rgba(188, 220, 244, 0.96)';
+    var textColor = isLight ? '#0b1826' : '#f3f9ff';
+    setImportant(panelRoot, '-webkit-print-color-adjust', 'exact');
+    setImportant(panelRoot, 'print-color-adjust', 'exact');
+    setImportant(panelRoot, 'opacity', '1');
+    setImportant(panelRoot, 'filter', 'none');
+
+    var fundamentalsBlock = panelRoot.querySelector('.panel-block--fundamentals');
+    if (fundamentalsBlock) {
+      setImportant(fundamentalsBlock, 'border-color', blockBorder);
+      setImportant(fundamentalsBlock, 'background', blockBg);
+      setImportant(fundamentalsBlock, 'box-shadow', 'inset 0 1px 0 rgba(255,255,255,0.08)');
+      setImportant(fundamentalsBlock, 'opacity', '1');
+      setImportant(fundamentalsBlock, 'filter', 'none');
+      setImportant(fundamentalsBlock, 'color', textColor);
+    }
+    var cards = panelRoot.querySelectorAll('.fundamentals-summary, .fundamentals-metric, .fundamentals-risk-row');
+    cards.forEach(function (el) {
+      setImportant(el, 'border-color', cardBorder);
+      setImportant(el, 'background', cardBg);
+      setImportant(el, 'box-shadow', 'none');
+      setImportant(el, 'color', textColor);
+    });
+    var mutedNodes = panelRoot.querySelectorAll(
+      '.muted, .fundamentals-metric__title, .fundamentals-metric small, .fundamentals-summary__score, ' +
+      '.fundamentals-summary__stat > span, .fundamentals-section__title, .fundamentals-section__count, .fundamentals-risk-meter__note'
+    );
+    mutedNodes.forEach(function (el) { setImportant(el, 'color', mutedColor); });
+    var strongNodes = panelRoot.querySelectorAll(
+      '.fundamentals-metric strong, .fundamentals-summary__stat > strong, .fundamentals-summary__score strong, ' +
+      '.fundamentals-risk-row__timeframe, .fundamentals-risk-row__line, .fundamentals-risk-row__reasons span'
+    );
+    strongNodes.forEach(function (el) { setImportant(el, 'color', textColor); });
+    var chipNodes = panelRoot.querySelectorAll('.fundamentals-chip, .fundamentals-summary__valuation');
+    chipNodes.forEach(function (el) {
+      setImportant(el, 'color', textColor);
+      if (!isLight) setImportant(el, 'border-color', 'rgba(94, 166, 214, 0.34)');
+    });
+  }
+
+  // Applies stronger contrast to indicators header status pills for PDF readability.
+  function applyIndicatorsPrintBoost(panelRoot, theme) {
+    if (!panelRoot || !panelRoot.querySelectorAll) return;
+    function setImportant(el, prop, value) {
+      if (!el || !el.style) return;
+      el.style.setProperty(prop, value, 'important');
+    }
+    var isLight = String(theme || '').toLowerCase() === 'light';
+    var textColor = isLight ? '#0b1826' : '#f3f9ff';
+    var mutedColor = isLight ? 'rgba(49, 70, 92, 0.94)' : 'rgba(194, 221, 244, 0.96)';
+    var blockBorder = isLight ? 'rgba(15, 23, 42, 0.1)' : 'rgba(64, 134, 181, 0.42)';
+    var blockBg = isLight
+      ? 'linear-gradient(168deg, rgba(255,255,255,0.95), rgba(247,251,255,0.9)), radial-gradient(circle at 8% -45%, rgba(44,182,255,0.12), transparent 64%)'
+      : 'linear-gradient(167deg, rgba(9,23,38,0.985), rgba(7,18,31,0.985)), radial-gradient(circle at 8% -45%, rgba(44,182,255,0.22), transparent 60%)';
+    var trendBorder = isLight ? 'rgba(15, 23, 42, 0.1)' : 'rgba(83, 156, 204, 0.34)';
+    var trendBg = isLight
+      ? 'linear-gradient(170deg, rgba(255,255,255,0.92), rgba(248,252,255,0.88)), radial-gradient(circle at 10% -40%, rgba(44,182,255,0.1), transparent 64%)'
+      : 'linear-gradient(170deg, rgba(21,44,66,0.8), rgba(14,30,48,0.76)), radial-gradient(circle at 10% -42%, rgba(44,182,255,0.16), transparent 62%)';
+    var trendItemBg = isLight ? 'rgba(15, 23, 42, 0.03)' : 'rgba(8, 24, 39, 0.82)';
+    var neutralBorder = isLight ? 'rgba(82, 108, 138, 0.3)' : 'rgba(126, 159, 196, 0.42)';
+    var neutralBg = isLight
+      ? 'linear-gradient(145deg, rgba(100, 116, 139, 0.2), rgba(100, 116, 139, 0.08))'
+      : 'linear-gradient(145deg, rgba(94, 122, 154, 0.58), rgba(63, 90, 119, 0.42))';
+    var bullishBorder = isLight ? 'rgba(12, 154, 116, 0.36)' : 'rgba(20, 241, 178, 0.52)';
+    var bullishBg = isLight
+      ? 'linear-gradient(145deg, rgba(12, 154, 116, 0.24), rgba(12, 154, 116, 0.1))'
+      : 'linear-gradient(145deg, rgba(19, 191, 145, 0.5), rgba(18, 145, 112, 0.34))';
+    var bearishBorder = isLight ? 'rgba(198, 63, 88, 0.34)' : 'rgba(251, 113, 133, 0.5)';
+    var bearishBg = isLight
+      ? 'linear-gradient(145deg, rgba(198, 63, 88, 0.22), rgba(198, 63, 88, 0.1))'
+      : 'linear-gradient(145deg, rgba(214, 82, 106, 0.48), rgba(156, 56, 74, 0.34))';
+
+    setImportant(panelRoot, '-webkit-print-color-adjust', 'exact');
+    setImportant(panelRoot, 'print-color-adjust', 'exact');
+    setImportant(panelRoot, 'opacity', '1');
+    setImportant(panelRoot, 'filter', 'none');
+
+    var overviewBlocks = panelRoot.querySelectorAll('.panel-block--indicators');
+    overviewBlocks.forEach(function (el) {
+      setImportant(el, 'border-color', blockBorder);
+      setImportant(el, 'background', blockBg);
+      setImportant(el, 'box-shadow', 'inset 0 1px 0 rgba(255,255,255,0.08)');
+      setImportant(el, 'opacity', '1');
+      setImportant(el, 'filter', 'none');
+      setImportant(el, 'color', textColor);
+    });
+
+    var trendBlocks = panelRoot.querySelectorAll('.panel-block--indicators .trend-meter');
+    trendBlocks.forEach(function (el) {
+      setImportant(el, 'border-color', trendBorder);
+      setImportant(el, 'background', trendBg);
+      setImportant(el, 'opacity', '1');
+      setImportant(el, 'filter', 'none');
+    });
+    var trendItems = panelRoot.querySelectorAll('.panel-block--indicators .trend-meter__item');
+    trendItems.forEach(function (el) {
+      setImportant(el, 'border-color', trendBorder);
+      setImportant(el, 'background', trendItemBg);
+    });
+
+    var headingNodes = panelRoot.querySelectorAll(
+      '.panel-block--indicators .panel-block__head h4, .panel-block--indicators .indicator-meta, .panel-block--indicators .muted, ' +
+      '.panel-block--indicators .trend-meter__title, .panel-block--indicators .trend-meter__overall-score, .panel-block--indicators .trend-meter__score, .panel-block--indicators .trend-meter__details'
+    );
+    headingNodes.forEach(function (el) {
+      var color = (
+        el.classList.contains('indicator-meta') ||
+        el.classList.contains('muted') ||
+        el.classList.contains('trend-meter__title') ||
+        el.classList.contains('trend-meter__overall-score') ||
+        el.classList.contains('trend-meter__score') ||
+        el.classList.contains('trend-meter__details')
+      ) ? mutedColor : textColor;
+      setImportant(el, 'color', color);
+    });
+    var trendTfNodes = panelRoot.querySelectorAll('.panel-block--indicators .trend-meter__tf');
+    trendTfNodes.forEach(function (el) { setImportant(el, 'color', textColor); });
+
+    var statusPills = panelRoot.querySelectorAll(
+      '#indicatorsOverallPill, #indicatorExplorerOverallPill, .panel-block--indicators > .panel-block__head .indicator-pill'
+    );
+    statusPills.forEach(function (el) {
+      var borderColor = neutralBorder;
+      var background = neutralBg;
+      var color = textColor;
+      if (el.classList.contains('indicator-pill--bullish')) {
+        borderColor = bullishBorder;
+        background = bullishBg;
+        color = isLight ? '#0c6249' : '#dcfff1';
+      } else if (el.classList.contains('indicator-pill--bearish')) {
+        borderColor = bearishBorder;
+        background = bearishBg;
+        color = isLight ? '#8b2e40' : '#ffe0e6';
+      }
+      setImportant(el, 'color', color);
+      setImportant(el, 'border-color', borderColor);
+      setImportant(el, 'background', background);
+      setImportant(el, 'opacity', '1');
+      setImportant(el, 'filter', 'none');
+      setImportant(el, 'box-shadow', '0 6px 14px rgba(0,0,0,0.2)');
+      setImportant(el, '-webkit-print-color-adjust', 'exact');
+      setImportant(el, 'print-color-adjust', 'exact');
+    });
+  }
+
+  // Builds the full print document HTML used by single-panel PDF export.
+  function buildSinglePanelExportPrintHtml(filename, panelHtml, theme) {
+    var htmlContent = String(panelHtml || '').trim();
+    var safeTheme = String(theme || document.documentElement.getAttribute('data-theme') || 'dark');
+    var styles = ['styles/global.css', 'styles/themes.css', 'styles/components.css', 'styles/charts.css']
+      .map(function (path) {
+        try {
+          return '<link rel="stylesheet" href="' + escapeHtml(new URL(path, window.location.href).href) + '" />';
+        } catch (err) {
+          return '';
+        }
+      })
+      .join('');
+    var printTitle = String(filename || 'panel-export').replace(/\.pdf$/i, '');
+    var html =
+      '<!DOCTYPE html>' +
+      '<html lang="en" data-theme="' + escapeHtml(safeTheme) + '">' +
+      '<head>' +
+        '<meta charset="UTF-8" />' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0" />' +
+        '<title>' + escapeHtml(printTitle) + '</title>' +
+        styles +
+        '<style>' +
+          '@page{size:auto;margin:10mm;}' +
+          'html,body{height:auto;min-height:auto;}' +
+          'body{margin:0;background:var(--bg,#0b1524);color:var(--text);overflow:visible;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+          '.panel-export-shell{max-width:none;height:auto;min-height:auto;padding:1rem;overflow:visible;display:block;}' +
+          '.panel-export-shell > *{display:block!important;width:100%!important;float:none!important;clear:both!important;overflow:visible!important;height:auto!important;min-height:0!important;max-height:none!important;}' +
+          '.panel-export-shell .side-panel,.panel-export-shell .right-panel,.panel-export-shell .indicators-panel{overflow:visible!important;height:auto!important;min-height:0!important;max-height:none!important;}' +
+          '.panel-export-shell .panel-block,.panel-export-shell .fundamentals-grid,.panel-export-shell .indicators-timeframes,.panel-export-shell .trend-meter{overflow:visible!important;height:auto!important;min-height:0!important;max-height:none!important;}' +
+          '.panel-export-shell .panel-block--fundamentals{border-color:rgba(255,255,255,0.16)!important;background:linear-gradient(168deg,rgba(255,255,255,0.07),rgba(255,255,255,0.026)),radial-gradient(circle at 8% -45%,rgba(44,182,255,0.2),transparent 62%)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,0.1)!important;}' +
+          '.panel-export-shell .fundamentals-summary{border-color:rgba(255,255,255,0.14)!important;background:linear-gradient(170deg,rgba(255,255,255,0.052),rgba(255,255,255,0.016)),radial-gradient(circle at 14% -40%,rgba(44,182,255,0.14),transparent 64%)!important;}' +
+          '.panel-export-shell .fundamentals-metric,.panel-export-shell .fundamentals-risk-row{border-color:rgba(255,255,255,0.14)!important;background:linear-gradient(170deg,rgba(255,255,255,0.052),rgba(255,255,255,0.016)),radial-gradient(circle at 14% -40%,rgba(44,182,255,0.14),transparent 64%)!important;}' +
+          '.panel-export-shell .fundamentals-summary__score,.panel-export-shell .fundamentals-summary__stat > span,.panel-export-shell .fundamentals-section__title,.panel-export-shell .fundamentals-section__count,.panel-export-shell .fundamentals-metric__title,.panel-export-shell .fundamentals-metric small,.panel-export-shell .fundamentals-risk-meter__note,.panel-export-shell .muted{color:rgba(236,246,255,0.92)!important;}' +
+          'html[data-theme="light"] .panel-export-shell .panel-block--fundamentals{border-color:rgba(15,23,42,0.13)!important;background:linear-gradient(168deg,rgba(255,255,255,0.98),rgba(247,251,255,0.94)),radial-gradient(circle at 8% -45%,rgba(44,182,255,0.14),transparent 64%)!important;}' +
+          'html[data-theme="light"] .panel-export-shell .fundamentals-summary{border-color:rgba(15,23,42,0.1)!important;background:linear-gradient(170deg,rgba(255,255,255,0.94),rgba(248,252,255,0.9)),radial-gradient(circle at 14% -40%,rgba(44,182,255,0.12),transparent 64%)!important;}' +
+          'html[data-theme="light"] .panel-export-shell .fundamentals-metric,html[data-theme="light"] .panel-export-shell .fundamentals-risk-row{border-color:rgba(15,23,42,0.1)!important;background:linear-gradient(170deg,rgba(255,255,255,0.94),rgba(248,252,255,0.9)),radial-gradient(circle at 14% -40%,rgba(44,182,255,0.12),transparent 64%)!important;}' +
+          'html[data-theme="light"] .panel-export-shell .fundamentals-summary__score,html[data-theme="light"] .panel-export-shell .fundamentals-summary__stat > span,html[data-theme="light"] .panel-export-shell .fundamentals-section__title,html[data-theme="light"] .panel-export-shell .fundamentals-section__count,html[data-theme="light"] .panel-export-shell .fundamentals-metric__title,html[data-theme="light"] .panel-export-shell .fundamentals-metric small,html[data-theme="light"] .panel-export-shell .fundamentals-risk-meter__note,html[data-theme="light"] .panel-export-shell .muted{color:rgba(36,56,79,0.92)!important;}' +
+          '.panel-export-shell .panel-expand-btn{display:none!important;}' +
+          '@media print{.panel-export-shell{padding:0;}}' +
+        '</style>' +
+      '</head>' +
+      '<body data-theme="' + escapeHtml(safeTheme) + '">' +
+        '<div class="panel-export-shell">' + htmlContent + '</div>' +
+      '</body>' +
+      '</html>';
+    return html;
+  }
+
+  // Opens a print window for a single panel clone (Indicators or Fundamentals).
+  function openSinglePanelExportPrintDialog(filename, panelHtml, theme) {
+    var html = buildSinglePanelExportPrintHtml(filename, panelHtml, theme);
+    if (!html || !String(panelHtml || '').trim()) {
+      setStatus('Panel export unavailable');
+      return false;
+    }
+    var printWindow = window.open('', '_blank', 'width=1320,height=940');
+    if (!printWindow) {
+      setStatus('Popup blocked: allow popups to export panel PDF');
+      return false;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onafterprint = function () {
+      try { printWindow.close(); } catch (err) {}
+    };
+    printWindow.onload = function () {
+      setTimeout(function () {
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } catch (err) {}
+      }, 260);
+    };
+    setStatus('Opening print dialog for panel PDF...');
+    return true;
+  }
+
+  // Builds normalized indicators panel export payload for print and zip workflows.
+  function buildIndicatorsPanelExportPayload() {
+    if (!ui || !ui.el || !ui.el.indicatorsPanel) return null;
+    var clone = ui.el.indicatorsPanel.cloneNode(true);
+    var theme = document.documentElement.getAttribute('data-theme');
+    applyIndicatorsPrintBoost(clone, theme);
+    var removeSelectors = ['#openIndicatorsPanelBtn', '#exportIndicatorsPdfBtn'];
+    removeSelectors.forEach(function (sel) {
+      var el = clone.querySelector(sel);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    var selectedAsset = getSelectedAsset(state.app.mode);
+    return {
+      filename: panelExportFilename('indicators', selectedAsset),
+      panelHtml: clone.outerHTML,
+      theme: theme
+    };
+  }
+
+  // Builds normalized fundamentals panel export payload for print and zip workflows.
+  function buildFundamentalsPanelExportPayload() {
+    if (!ui || !ui.el || !ui.el.fundamentalsPanel) return null;
+    var clone = ui.el.fundamentalsPanel.cloneNode(true);
+    var theme = document.documentElement.getAttribute('data-theme');
+    applyFundamentalsPrintBoost(clone, theme);
+    var removeSelectors = ['#openFundamentalsPanelBtn', '#exportFundamentalsPdfBtn', '#btcDominancePanel'];
+    removeSelectors.forEach(function (sel) {
+      var el = clone.querySelector(sel);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    var selectedAsset = getSelectedAsset(state.app.mode);
+    return {
+      filename: panelExportFilename('fundamentals', selectedAsset),
+      panelHtml: clone.outerHTML,
+      theme: theme
+    };
+  }
+
+  // Downloads a Blob with a provided filename.
+  function downloadBlobFile(blob, filename) {
+    var safeName = String(filename || 'download').trim() || 'download';
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = safeName;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 600);
+  }
+
+  // Renders a panel PDF on server and downloads it without opening print/popups.
+  function renderServerPanelPdfAndDownload(filename, htmlDoc) {
+    var endpoint = mainProxyBase() + '/api/export-panel-pdf';
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        filename: filename,
+        html: String(htmlDoc || '')
+      })
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.json().catch(function () { return {}; }).then(function (errBody) {
+          var detail = String((errBody && (errBody.detail || errBody.error)) || ('HTTP ' + response.status)).trim();
+          throw new Error(detail || 'Panel PDF export failed');
+        });
+      }
+      return response.blob();
+    }).then(function (blob) {
+      downloadBlobFile(blob, filename);
+      return true;
+    });
+  }
+
+  // Exports Indicators panel only.
+  function exportIndicatorsPanelPdf() {
+    var payload = buildIndicatorsPanelExportPayload();
+    if (!payload) {
+      setStatus('Indicators export unavailable');
+      return;
+    }
+    openSinglePanelExportPrintDialog(payload.filename, payload.panelHtml, payload.theme);
+  }
+
+  // Exports Fundamentals panel only (without BTC dominance block).
+  function exportFundamentalsPanelPdf() {
+    var payload = buildFundamentalsPanelExportPayload();
+    if (!payload) {
+      setStatus('Fundamentals export unavailable');
+      return;
+    }
+    openSinglePanelExportPrintDialog(payload.filename, payload.panelHtml, payload.theme);
+  }
+
+  // Top-bar export: renders indicators + fundamentals PDFs server-side and downloads a ZIP bundle.
+  function exportAnalysisZipBundle() {
+    var indicatorsPayload = buildIndicatorsPanelExportPayload();
+    var fundamentalsPayload = buildFundamentalsPanelExportPayload();
+    if (!indicatorsPayload || !fundamentalsPayload) {
+      setStatus('Analysis export unavailable');
+      return;
+    }
+    var indicatorsHtml = buildSinglePanelExportPrintHtml(
+      indicatorsPayload.filename,
+      indicatorsPayload.panelHtml,
+      indicatorsPayload.theme
+    );
+    var fundamentalsHtml = buildSinglePanelExportPrintHtml(
+      fundamentalsPayload.filename,
+      fundamentalsPayload.panelHtml,
+      fundamentalsPayload.theme
+    );
+    if (!indicatorsHtml || !fundamentalsHtml) {
+      setStatus('Analysis export unavailable');
+      return;
+    }
+
+    var selectedAsset = getSelectedAsset(state.app.mode);
+    var zipName = analysisZipFilename(selectedAsset);
+    var endpoint = mainProxyBase() + '/api/export-analysis-zip';
+
+    setStatus('Building analysis ZIP...');
+    fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        zipFilename: zipName,
+        files: [
+          { filename: indicatorsPayload.filename, html: indicatorsHtml },
+          { filename: fundamentalsPayload.filename, html: fundamentalsHtml }
+        ]
+      })
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.json().catch(function () { return {}; }).then(function (errBody) {
+          var detail = String((errBody && (errBody.detail || errBody.error)) || ('HTTP ' + response.status)).trim();
+          throw new Error(detail || 'Analysis ZIP export failed');
+        });
+      }
+      return response.blob();
+    }).then(function (blob) {
+      downloadBlobFile(blob, zipName);
+      setStatus('Analysis ZIP exported');
+    }).catch(function (err) {
+      if (state.app.apiDebugEnabled) {
+        try { console.debug('[Export] Analysis ZIP failed', err && err.message ? err.message : err); } catch (noop) {}
+      }
+      setStatus('Analysis ZIP export failed');
+    });
+  }
+
+  // Builds the Quick Summary block used by analysis PDF exports.
+  function buildAnalysisExportSummaryPanelHtml(assetLabel, taLabel, taScore, qualityLabel, valuationLabel, riskLabel, riskScore) {
+    return '<aside class="side-panel glass analysis-export-panel analysis-export-panel--summary">' +
+      '<section class="panel-block mobile-quick-summary analysis-export__summary" aria-hidden="false">' +
+        '<div class="section-header">' +
+          '<h4>Quick Summary</h4>' +
+          '<span class="muted">' + escapeHtml(assetLabel) + '</span>' +
+        '</div>' +
+        '<div class="mobile-quick-summary__grid">' +
+          '<article class="mobile-quick-summary__tile">' +
+            '<div class="mobile-quick-summary__tile-head">' +
+              '<span class="mobile-quick-summary__tile-title">Indicators</span>' +
+              '<span class="indicator-pill ' + mobileQuickSummaryToneClass(taLabel) + '">' + escapeHtml(taLabel) + '</span>' +
+            '</div>' +
+            '<div class="mobile-quick-summary__meta">Weighted score: <strong>' + escapeHtml(taScore == null ? 'n/a' : String(taScore)) + '</strong></div>' +
+          '</article>' +
+          '<article class="mobile-quick-summary__tile">' +
+            '<div class="mobile-quick-summary__tile-head">' +
+              '<span class="mobile-quick-summary__tile-title">Fundamentals</span>' +
+              '<span class="indicator-pill ' + mobileQuickSummaryToneClass(qualityLabel) + '">' + escapeHtml(qualityLabel) + '</span>' +
+            '</div>' +
+            '<div class="mobile-quick-summary__meta">Valuation: <strong class="mobile-quick-summary__valuation ' + mobileQuickSummaryToneClass(valuationLabel) + '">' + escapeHtml(valuationLabel) + '</strong></div>' +
+          '</article>' +
+          '<article class="mobile-quick-summary__tile">' +
+            '<div class="mobile-quick-summary__tile-head">' +
+              '<span class="mobile-quick-summary__tile-title">Risk</span>' +
+              '<span class="indicator-pill ' + mobileQuickSummaryToneClass(riskLabel) + '">' + escapeHtml(riskLabel) + '</span>' +
+            '</div>' +
+            '<div class="mobile-quick-summary__meta">1D score: <strong>' + escapeHtml(riskScore == null ? 'n/a' : String(Math.round(riskScore))) + '</strong></div>' +
+          '</article>' +
+        '</div>' +
+      '</section>' +
+    '</aside>';
+  }
+
+  // Normalizes a panel root into an export-safe wrapper class to avoid app layout CSS interference.
+  function normalizeAnalysisExportPanelHtml(panelHtml) {
+    return String(panelHtml || '');
+  }
+
+  // Opens a print window that mirrors the in-app analysis panel stack for PDF export.
+  function openAnalysisExportPrintDialog(filename, summaryPanelHtml, fundamentalsHtml, riskSectionHtml, indicatorsHtml) {
+    var riskPanel = document.createElement('aside');
+    riskPanel.className = 'right-panel glass analysis-export-panel analysis-export-panel--risk';
+    riskPanel.innerHTML =
+      '<div class="section-header"><div><h3>Risk Meter</h3></div></div>' +
+      '<section class="panel-block panel-block--fundamentals">' +
+        '<div class="fundamentals-grid">' +
+          (riskSectionHtml || '<div class="muted">No risk meter snapshot yet.</div>') +
+        '</div>' +
+      '</section>';
+
+    var printWindow = window.open('', '_blank', 'width=1480,height=980');
+    if (!printWindow) {
+      setStatus('Popup blocked: allow popups to export analysis PDF');
+      return false;
+    }
+
+    var theme = String(document.documentElement.getAttribute('data-theme') || 'dark');
+    var styles = ['styles/global.css', 'styles/themes.css', 'styles/components.css', 'styles/charts.css']
+      .map(function (path) {
+        try {
+          return '<link rel="stylesheet" href="' + escapeHtml(new URL(path, window.location.href).href) + '" />';
+        } catch (err) {
+          return '';
+        }
+      })
+      .join('');
+    var printTitle = String(filename || 'analysis-export').replace(/\.pdf$/i, '');
+    var html =
+      '<!DOCTYPE html>' +
+      '<html lang="en" data-theme="' + escapeHtml(theme) + '">' +
+      '<head>' +
+        '<meta charset="UTF-8" />' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0" />' +
+        '<title>' + escapeHtml(printTitle) + '</title>' +
+        styles +
+        '<style>' +
+          '@page{size:auto;margin:10mm;}' +
+          'html,body{height:auto;min-height:auto;}' +
+          'body{margin:0;background:var(--bg,#0b1524);color:var(--text);overflow:visible;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+          '.analysis-export-shell{max-width:none;height:auto;min-height:auto;padding:1rem;overflow:visible;display:block;}' +
+          '.analysis-export__stack{margin-top:0;display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:0!important;overflow:visible;}' +
+          '.analysis-export__stack > *{display:block!important;width:100%!important;float:none!important;clear:both!important;overflow:visible!important;height:auto!important;min-height:0!important;max-height:none!important;page-break-inside:auto;break-inside:auto;}' +
+          '.analysis-export__stack > * + *{margin-top:0!important;}' +
+          '.analysis-export__stack > .side-panel,.analysis-export__stack > .indicators-panel,.analysis-export__stack > .right-panel,.analysis-export__stack > .analysis-export-panel{overflow:visible!important;height:auto!important;min-height:0!important;max-height:none!important;}' +
+          '.analysis-export__stack .panel-block,.analysis-export__stack .fundamentals-grid,.analysis-export__stack .indicators-timeframes,.analysis-export__stack .trend-meter{overflow:visible!important;height:auto!important;min-height:0!important;max-height:none!important;}' +
+          '.analysis-export__summary.mobile-quick-summary{display:block!important;}' +
+          '.analysis-export__summary .mobile-quick-summary__tile{cursor:default;}' +
+          '.analysis-export__stack .panel-expand-btn{display:none!important;}' +
+          '@media print{.analysis-export-shell{padding:0;}.analysis-export__stack{gap:0;}}' +
+        '</style>' +
+      '</head>' +
+      '<body data-theme="' + escapeHtml(theme) + '">' +
+        '<div class="analysis-export-shell">' +
+          '<main class="analysis-export__stack">' +
+            String(summaryPanelHtml || '') +
+            String(fundamentalsHtml || '') +
+            riskPanel.outerHTML +
+            String(indicatorsHtml || '') +
+          '</main>' +
+        '</div>' +
+      '</body>' +
+      '</html>';
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onafterprint = function () {
+      try { printWindow.close(); } catch (err) {}
+    };
+    printWindow.onload = function () {
+      setTimeout(function () {
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } catch (err) {}
+      }, 260);
+    };
+    setStatus('Opening print dialog for analysis PDF...');
+    return true;
+  }
+
+  // Exports main UI analysis as two panel PDFs (Indicators + Fundamentals) without popups.
+  function exportAnalysisPdf() {
+    var selectedAsset = getSelectedAsset(state.app.mode);
+    var filenameAsset = selectedAsset || null;
+    var indicatorsPayload = buildIndicatorsPanelExportPayload();
+    var fundamentalsPayload = buildFundamentalsPanelExportPayload();
+    if (!indicatorsPayload || !fundamentalsPayload) {
+      setStatus('Analysis export unavailable');
+      return;
+    }
+    var indicatorsFilename = analysisPanelPdfFilename(filenameAsset, 'indicators');
+    var fundamentalsFilename = analysisPanelPdfFilename(filenameAsset, 'fundamentals');
+    var indicatorsDoc = buildSinglePanelExportPrintHtml(
+      indicatorsFilename,
+      indicatorsPayload.panelHtml,
+      indicatorsPayload.theme
+    );
+    var fundamentalsDoc = buildSinglePanelExportPrintHtml(
+      fundamentalsFilename,
+      fundamentalsPayload.panelHtml,
+      fundamentalsPayload.theme
+    );
+    setStatus('Preparing indicators and fundamentals PDFs...');
+    Promise.all([
+      renderServerPanelPdfAndDownload(indicatorsFilename, indicatorsDoc),
+      renderServerPanelPdfAndDownload(fundamentalsFilename, fundamentalsDoc)
+    ]).then(function () {
+      setStatus('Indicators and fundamentals PDFs downloaded');
+    }).catch(function (err) {
+      if (state.app.apiDebugEnabled) {
+        try { console.debug('[Export] Main panel PDF export failed', err && err.message ? err.message : err); } catch (noop) {}
+      }
+      setStatus('Export failed');
+    });
+  }
+
+  // Exports the currently selected Explore asset as two panel PDFs (Indicators + Fundamentals).
+  function exportAnalysisPdfFromExplorer() {
+    if (!ui || !ui.el || !ui.el.indicatorExplorerModal) {
+      setStatus('Analysis export unavailable');
+      return;
+    }
+    var selected = INDICATOR_EXPLORER && INDICATOR_EXPLORER.selected ? INDICATOR_EXPLORER.selected : null;
+    if (!selected) {
+      setStatus('Select an asset in Explore first');
+      return;
+    }
+
+    var exportAsset = explorerAssetFromTarget(selected);
+    var assetLabel = selected.assetType === 'crypto'
+      ? String(selected.baseSymbol || selected.symbol || selected.label || '').replace('/USD', '').trim().toUpperCase()
+      : normalizeStockTicker(selected.yahooSymbol || selected.symbol || selected.label || '');
+    if (!assetLabel) assetLabel = String(selected.label || (exportAsset && (exportAsset.symbol || exportAsset.name)) || 'Selected Asset').trim();
+    var filenameAsset = exportAsset || { symbol: assetLabel };
+    var exportTheme = document.documentElement.getAttribute('data-theme');
+
+    var indicatorsContainer = document.createElement('aside');
+    indicatorsContainer.className = 'indicators-panel glass';
+    var indicatorHead = ui.el.indicatorExplorerAssetLabel ? ui.el.indicatorExplorerAssetLabel.closest('.panel-block') : null;
+    var indicatorFrames = ui.el.indicatorExplorerTimeframes || null;
+    if (indicatorHead) indicatorsContainer.appendChild(indicatorHead.cloneNode(true));
+    if (indicatorFrames) indicatorsContainer.appendChild(indicatorFrames.cloneNode(true));
+    applyIndicatorsPrintBoost(indicatorsContainer, exportTheme);
+    var indicatorExpandBtns = indicatorsContainer.querySelectorAll('.panel-expand-btn');
+    indicatorExpandBtns.forEach(function (btn) { btn.remove(); });
+
+    var fundamentalsBlock = ui.el.indicatorExplorerFundamentalsGrid
+      ? ui.el.indicatorExplorerFundamentalsGrid.closest('.panel-block')
+      : null;
+    var fundamentalsClone = fundamentalsBlock ? fundamentalsBlock.cloneNode(true) : null;
+    if (fundamentalsClone) {
+      applyFundamentalsPrintBoost(fundamentalsClone, exportTheme);
+      var expandBtns = fundamentalsClone.querySelectorAll('.panel-expand-btn');
+      expandBtns.forEach(function (btn) { btn.remove(); });
+    }
+
+    var fundamentalsContainer = document.createElement('aside');
+    fundamentalsContainer.className = 'right-panel glass';
+    if (fundamentalsClone) {
+      fundamentalsContainer.appendChild(fundamentalsClone);
+    } else {
+      fundamentalsContainer.innerHTML = '<section class="panel-block panel-block--fundamentals"><div class="muted">No fundamentals snapshot yet.</div></section>';
+    }
+
+    var indicatorsFilename = analysisPanelPdfFilename(filenameAsset, 'indicators');
+    var fundamentalsFilename = analysisPanelPdfFilename(filenameAsset, 'fundamentals');
+    var indicatorsDoc = buildSinglePanelExportPrintHtml(indicatorsFilename, indicatorsContainer.outerHTML, exportTheme);
+    var fundamentalsDoc = buildSinglePanelExportPrintHtml(fundamentalsFilename, fundamentalsContainer.outerHTML, exportTheme);
+    setStatus('Preparing indicators and fundamentals PDFs...');
+    Promise.all([
+      renderServerPanelPdfAndDownload(indicatorsFilename, indicatorsDoc),
+      renderServerPanelPdfAndDownload(fundamentalsFilename, fundamentalsDoc)
+    ]).then(function () {
+      setStatus('Indicators and fundamentals PDFs downloaded');
+    }).catch(function (err) {
+      if (state.app.apiDebugEnabled) {
+        try { console.debug('[Export] Explorer panel PDF export failed', err && err.message ? err.message : err); } catch (noop) {}
+      }
+      setStatus('Export failed');
+    });
   }
 
   // Destroys the allocation pie chart instance created inside the expanded panel viewer.
@@ -4793,6 +5677,8 @@
         resetBtn.textContent = 'Reset sectors';
         actionsHost.appendChild(resetBtn);
       }
+      // Expanded panel: force visibility even if the source button is hidden in main UI.
+      resetBtn.classList.remove('hidden');
       resetBtn.disabled = allocationModeStocks() !== 'sectors';
       resetBtn.title = resetBtn.disabled
         ? 'Switch to Sectors mode to reset custom sectors'
@@ -4969,7 +5855,13 @@
     if (ui.el.panelViewerModal) ui.el.panelViewerModal.setAttribute('data-panel-type', cfg.type);
     destroyPanelViewerAllocationChart();
     if (ui.el.panelViewerTitle) ui.el.panelViewerTitle.textContent = cfg.title;
-    if (ui.el.panelViewerSubtitle) ui.el.panelViewerSubtitle.textContent = cfg.subtitle || 'Expanded panel preview.';
+    if (ui.el.panelViewerSubtitle) {
+      var subtitleText = Object.prototype.hasOwnProperty.call(cfg, 'subtitle')
+        ? String(cfg.subtitle || '')
+        : 'Expanded panel preview.';
+      ui.el.panelViewerSubtitle.textContent = subtitleText;
+      ui.el.panelViewerSubtitle.classList.toggle('hidden', !subtitleText);
+    }
     var clone = sanitizePanelViewerClone(cfg.source.cloneNode(true), cfg.type);
     var preview = document.createElement('div');
     preview.className = 'panel-viewer-preview panel-viewer-preview--' + cfg.type;
@@ -5254,6 +6146,28 @@
     );
   }
 
+  function formatIndicatorExplorerChartPrice(target, value) {
+    var price = Number(value);
+    if (!isFinite(price) || price <= 0) return '';
+    if (target && target.assetType === 'crypto') {
+      var abs = Math.abs(price);
+      var maxDigits = abs >= 1000 ? 2 : (abs >= 1 ? 4 : 6);
+      return '$' + price.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: maxDigits
+      });
+    }
+    if (ui && typeof ui.fmtCurrency === 'function') return ui.fmtCurrency(price);
+    return '$' + price.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
+  function indicatorExplorerChartTitle(target, timeframeId, latestPrice) {
+    var label = String(target && (target.label || target.symbol) || 'Asset').trim() || 'Asset';
+    var tfLabel = normalizeChartTimeframe(timeframeId);
+    var priceText = formatIndicatorExplorerChartPrice(target, latestPrice);
+    return label + ' Chart' + (priceText ? (' • ' + priceText) : '') + ' • ' + tfLabel;
+  }
+
   // Builds the TradingView URL for the selected Explore target.
   function buildIndicatorExplorerTradingViewUrl(target) {
     if (!target) return '';
@@ -5273,6 +6187,10 @@
     var selected = INDICATOR_EXPLORER && INDICATOR_EXPLORER.selected ? INDICATOR_EXPLORER.selected : null;
     if (!selected) {
       if (ui.el.indicatorExplorerSummaryAsset) ui.el.indicatorExplorerSummaryAsset.textContent = 'No asset selected';
+      if (ui.el.indicatorExplorerExportAnalysisBtn) {
+        ui.el.indicatorExplorerExportAnalysisBtn.disabled = true;
+        ui.el.indicatorExplorerExportAnalysisBtn.title = 'Select an asset to export analysis PDF';
+      }
       if (ui.el.indicatorExplorerSummaryPriceBadge) {
         ui.el.indicatorExplorerSummaryPriceBadge.classList.add('hidden');
         ui.el.indicatorExplorerSummaryPriceBadge.innerHTML = '';
@@ -5284,6 +6202,10 @@
       : normalizeStockTicker(selected.yahooSymbol || selected.symbol || '');
     if (ui.el.indicatorExplorerSummaryAsset) {
       ui.el.indicatorExplorerSummaryAsset.textContent = symbol || selected.label || 'Selected asset';
+    }
+    if (ui.el.indicatorExplorerExportAnalysisBtn) {
+      ui.el.indicatorExplorerExportAnalysisBtn.disabled = false;
+      ui.el.indicatorExplorerExportAnalysisBtn.title = 'Export analysis PDF';
     }
     if (!ui.el.indicatorExplorerSummaryPriceBadge) return;
     var summary = getIndicatorExplorerTargetQuoteSummary(selected);
@@ -5334,6 +6256,10 @@
       : null;
     var qualityLabel = faPanel ? String(faPanel.qualityLabel || faPanel.label || 'n/a').trim() || 'n/a' : 'n/a';
     var valuationLabel = faPanel ? String(faPanel.valuationLabel || 'n/a').trim() || 'n/a' : 'n/a';
+    if (!fundamentalsPanelHasMetrics(faPanel)) {
+      qualityLabel = 'n/a';
+      valuationLabel = 'n/a';
+    }
     var riskLabel = 'n/a';
     var riskScore = null;
     if (faPanel && faPanel.riskMeter && typeof faPanel.riskMeter === 'object') {
@@ -5428,8 +6354,10 @@
         if (reqId !== INDICATOR_EXPLORER.chartRequestId ||
             !isIndicatorExplorerSelectionStillActive(selectionRequestId, String(target && target.cacheKey || ''), target, token)) return;
         var rows = filterHistoryForTimeframe(hist, timeframeId);
+        var latestClose = rows.length ? Number(rows[rows.length - 1] && rows[rows.length - 1].c) : null;
+        if (!isFinite(latestClose)) latestClose = null;
         INDICATOR_EXPLORER.chart = {
-          title: (target.label || target.symbol || 'Asset') + ' Chart • ' + normalizeChartTimeframe(timeframeId),
+          title: indicatorExplorerChartTitle(target, timeframeId, latestClose),
           meta: rows.length ? ('Loaded ' + rows.length + ' points') : 'No chart data available.',
           labels: rows.map(function (p) { return p.t; }),
           values: rows.map(function (p) { return p.c; }),
@@ -5788,6 +6716,7 @@
     var quote = getCachedQuoteForExplorerFavorite(entry, target);
     var price = preferredQuotePriceForEntry(quote);
     var dayPct = null;
+    var fetchedAt = toFiniteNumber(quote && quote.fetchedAt);
     var quoteChangePct = toFiniteNumber(quote && quote.changePercent);
     var quotePercentChange = toFiniteNumber(quote && quote.percent_change);
     var quoteChange = toFiniteNumber(quote && quote.change);
@@ -5815,6 +6744,7 @@
     var snapshotPrev = (tfSnapshot && tfSnapshot.values && isFinite(Number(tfSnapshot.values.prevClose)))
       ? Number(tfSnapshot.values.prevClose)
       : null;
+    if (fetchedAt === null && tfSnapshot && isFinite(Number(tfSnapshot.fetchedAt))) fetchedAt = Number(tfSnapshot.fetchedAt);
     if (price === null && snapshotClose !== null) price = snapshotClose;
     if (dayPct === null && snapshotClose !== null && snapshotPrev !== null && snapshotPrev !== 0) {
       dayPct = ((snapshotClose - snapshotPrev) / snapshotPrev) * 100;
@@ -5822,7 +6752,8 @@
 
     return {
       price: isFinite(Number(price)) ? Number(price) : null,
-      dayPct: isFinite(Number(dayPct)) ? Number(dayPct) : null
+      dayPct: isFinite(Number(dayPct)) ? Number(dayPct) : null,
+      fetchedAt: isFinite(Number(fetchedAt)) ? Number(fetchedAt) : null
     };
   }
 
@@ -5925,6 +6856,18 @@
     if (!ui || !ui.el || !ui.el.indicatorExplorerFavoritesRefreshBtn) return;
     ui.el.indicatorExplorerFavoritesRefreshBtn.disabled = !!loading;
     ui.el.indicatorExplorerFavoritesRefreshBtn.classList.toggle('is-loading', !!loading);
+    if (loading) {
+      ui.el.indicatorExplorerFavoritesRefreshBtn.classList.remove('is-stale');
+      ui.el.indicatorExplorerFavoritesRefreshBtn.classList.remove('is-fresh');
+    }
+  }
+
+  // Colors favorites refresh state by quote freshness.
+  function setIndicatorExplorerFavoritesRefreshTone(tone) {
+    if (!ui || !ui.el || !ui.el.indicatorExplorerFavoritesRefreshBtn) return;
+    var btn = ui.el.indicatorExplorerFavoritesRefreshBtn;
+    btn.classList.toggle('is-stale', tone === 'stale');
+    btn.classList.toggle('is-fresh', tone === 'fresh');
   }
 
   // Applies previous-close derived day metrics to a stock quote snapshot.
@@ -6181,6 +7124,8 @@
   function renderIndicatorExplorerFavoritesList() {
     if (!ui || !ui.el || !ui.el.indicatorExplorerFavoritesList) return;
     var list = indicatorExplorerFavoritesForMode(INDICATOR_EXPLORER.mode);
+    var nowMs = Date.now();
+    var hasStaleQuote = false;
     var otherMode = INDICATOR_EXPLORER.mode === 'crypto' ? 'stocks' : 'crypto';
     var otherList = indicatorExplorerFavoritesForMode(otherMode);
     renderIndicatorExplorerFavoritesSortControls();
@@ -6201,6 +7146,7 @@
         ui.el.indicatorExplorerFavoritesList.innerHTML =
           '<div class="indicator-explorer-favorites__empty">No favorites yet. Search and mark assets with ☆ Favorite.</div>';
       }
+      setIndicatorExplorerFavoritesRefreshTone('');
       return;
     }
     var rows = [];
@@ -6219,6 +7165,9 @@
         var taStatus = indicatorOverallStatusForTarget(target);
         var faStatus = fundamentalsQualityStatusForTarget(target);
         var quoteSummary = getExplorerFavoriteQuoteSummary(entry, target);
+        var fetchedAt = toFiniteNumber(quoteSummary.fetchedAt);
+        var quoteAgeMs = fetchedAt !== null ? (nowMs - Number(fetchedAt)) : null;
+        if (quoteAgeMs === null || quoteAgeMs > INDICATOR_EXPLORER_FAVORITES_STALE_MS) hasStaleQuote = true;
         var priceText = quoteSummary.price != null ? ui.fmtCurrency(quoteSummary.price) : 'n/a';
         var dayClass = quoteSummary.dayPct == null ? 'pl--flat' : ui.pctClass(quoteSummary.dayPct);
         var dayText = quoteSummary.dayPct == null ? 'n/a' : ui.pctText(quoteSummary.dayPct);
@@ -6253,6 +7202,7 @@
             '</div>'
         });
       } catch (err) {
+        hasStaleQuote = true;
         var fallbackKey = indicatorExplorerFavoriteKeyFromEntry(entry);
         var fallbackTicker = String(entry && (entry.yahooSymbol || entry.symbol || entry.coinId) || '').trim().toUpperCase();
         rows.push({
@@ -6315,6 +7265,7 @@
     ui.el.indicatorExplorerFavoritesList.innerHTML = rows.map(function (row) { return row.html; }).join('');
     ui.el.indicatorExplorerFavoritesList.scrollTop = 0;
     ui.el.indicatorExplorerFavoritesList.scrollLeft = 0;
+    setIndicatorExplorerFavoritesRefreshTone(hasStaleQuote ? 'stale' : 'fresh');
   }
 
   // Updates the selected-asset favorite button state.
@@ -6839,6 +7790,17 @@
     });
   }
 
+  function syncAllocationResetSectorsButtonState() {
+    if (!ui || !ui.el || !ui.el.allocationResetSectorsBtn) return;
+    // Main UI: keep Reset sectors hidden; it is available only in expanded Allocation panel.
+    var sectorsActive = allocationModeStocks() === 'sectors';
+    ui.el.allocationResetSectorsBtn.classList.add('hidden');
+    ui.el.allocationResetSectorsBtn.disabled = !sectorsActive;
+    ui.el.allocationResetSectorsBtn.title = sectorsActive
+      ? 'Reset custom sectors to algorithm classification'
+      : 'Switch to Sectors mode to reset custom sectors';
+  }
+
   function renderAllocation(items, options) {
     var safeItems = Array.isArray(items) ? items.slice() : [];
     var sorted = safeItems.slice().sort(function (a, b) { return b.marketValue - a.marketValue; });
@@ -6920,9 +7882,16 @@
   function mobileQuickSummaryToneClass(label) {
     var normalized = String(label || '').trim().toLowerCase();
     if (!normalized || normalized === 'n/a') return 'indicator-pill--neutral';
-    if (normalized === 'low') return 'indicator-pill--bullish';
-    if (normalized === 'moderate' || normalized === 'elevated') return 'indicator-pill--neutral';
-    if (normalized === 'high' || normalized === 'very high') return 'indicator-pill--bearish';
+    if (normalized === 'low' || normalized === 'low risk') return 'indicator-pill--bullish';
+    if (normalized === 'moderate' || normalized === 'elevated' || normalized === 'moderate risk' || normalized === 'elevated risk') {
+      return 'indicator-pill--caution';
+    }
+    if (normalized === 'high' || normalized === 'very high' || normalized === 'high risk' || normalized === 'very high risk') {
+      return 'indicator-pill--bearish';
+    }
+    if (normalized.indexOf('low risk') >= 0) return 'indicator-pill--bullish';
+    if (normalized.indexOf('moderate risk') >= 0 || normalized.indexOf('elevated risk') >= 0) return 'indicator-pill--caution';
+    if (normalized.indexOf('very high') >= 0 || normalized.indexOf('high risk') >= 0) return 'indicator-pill--bearish';
     if (
       normalized.indexOf('bull') >= 0 ||
       normalized.indexOf('strong') >= 0 ||
@@ -6936,6 +7905,43 @@
       normalized === 'expensive'
     ) return 'indicator-pill--bearish';
     return 'indicator-pill--neutral';
+  }
+
+  function fundamentalsPanelHasMetrics(panel) {
+    if (!panel || !Array.isArray(panel.sections)) return false;
+    return panel.sections.some(function (section) {
+      var metrics = Array.isArray(section && section.metrics) ? section.metrics : [];
+      return metrics.some(function (metric) {
+        return metric && metric.value != null;
+      });
+    });
+  }
+
+  function mobileQuickSummaryScrollTarget(sectionKey) {
+    if (!ui || !ui.el) return null;
+    var key = String(sectionKey || '').trim().toLowerCase();
+    if (key === 'indicators') return ui.el.indicatorsPanel || null;
+    if (key === 'fundamentals') return ui.el.fundamentalsPanel || null;
+    if (key === 'risk') {
+      var riskSection = ui.el.fundamentalsGrid
+        ? ui.el.fundamentalsGrid.querySelector('.fundamentals-section--risk')
+        : null;
+      return riskSection || ui.el.fundamentalsPanel || null;
+    }
+    return null;
+  }
+
+  function scrollToMobileQuickSummarySection(sectionKey) {
+    if (!window.matchMedia('(max-width: 1120px)').matches) return;
+    var targetEl = mobileQuickSummaryScrollTarget(sectionKey);
+    if (!targetEl) return;
+    requestAnimationFrame(function () {
+      var stickyTopOffset = getMobileRowFocusTopOffset();
+      var extraGap = 8;
+      var absoluteTop = Number(window.scrollY || window.pageYOffset || 0) + targetEl.getBoundingClientRect().top;
+      var targetTop = Math.max(0, absoluteTop - stickyTopOffset - extraGap);
+      window.scrollTo({ top: targetTop, behavior: 'smooth' });
+    });
   }
 
   // Renders a compact TA/FA quick summary card shown only in mobile details flow.
@@ -6963,6 +7969,10 @@
     var panel = snapshot && snapshot.panel ? snapshot.panel : null;
     var qualityLabel = panel ? String(panel.qualityLabel || panel.label || 'n/a').trim() || 'n/a' : 'n/a';
     var valuationLabel = panel ? String(panel.valuationLabel || 'n/a').trim() || 'n/a' : 'n/a';
+    if (!fundamentalsPanelHasMetrics(panel)) {
+      qualityLabel = 'n/a';
+      valuationLabel = 'n/a';
+    }
     var riskLabel = 'n/a';
     var riskScore = null;
     if (panel && panel.riskMeter && typeof panel.riskMeter === 'object') {
@@ -6985,27 +7995,27 @@
     }
 
     ui.el.mobileQuickSummaryGrid.innerHTML =
-      '<article class="mobile-quick-summary__tile">' +
+      '<button type="button" class="mobile-quick-summary__tile" data-summary-jump="indicators" aria-label="Go to Indicators section">' +
         '<div class="mobile-quick-summary__tile-head">' +
           '<span class="mobile-quick-summary__tile-title">Indicators</span>' +
           '<span class="indicator-pill ' + mobileQuickSummaryToneClass(taLabel) + '">' + escapeHtml(taLabel) + '</span>' +
         '</div>' +
         '<div class="mobile-quick-summary__meta">Weighted score: <strong>' + escapeHtml(taScore == null ? 'n/a' : String(taScore)) + '</strong></div>' +
-      '</article>' +
-      '<article class="mobile-quick-summary__tile">' +
+      '</button>' +
+      '<button type="button" class="mobile-quick-summary__tile" data-summary-jump="fundamentals" aria-label="Go to Fundamentals section">' +
         '<div class="mobile-quick-summary__tile-head">' +
           '<span class="mobile-quick-summary__tile-title">Fundamentals</span>' +
           '<span class="indicator-pill ' + mobileQuickSummaryToneClass(qualityLabel) + '">' + escapeHtml(qualityLabel) + '</span>' +
         '</div>' +
         '<div class="mobile-quick-summary__meta">Valuation: <strong class="mobile-quick-summary__valuation ' + mobileQuickSummaryToneClass(valuationLabel) + '">' + escapeHtml(valuationLabel) + '</strong></div>' +
-      '</article>' +
-      '<article class="mobile-quick-summary__tile">' +
+      '</button>' +
+      '<button type="button" class="mobile-quick-summary__tile" data-summary-jump="risk" aria-label="Go to Risk section">' +
         '<div class="mobile-quick-summary__tile-head">' +
           '<span class="mobile-quick-summary__tile-title">Risk</span>' +
           '<span class="indicator-pill ' + mobileQuickSummaryToneClass(riskLabel) + '">' + escapeHtml(riskLabel) + '</span>' +
         '</div>' +
         '<div class="mobile-quick-summary__meta">1D score: <strong>' + escapeHtml(riskScore == null ? 'n/a' : String(Math.round(riskScore))) + '</strong></div>' +
-      '</article>';
+      '</button>';
 
     panelEl.classList.remove('hidden');
     panelEl.setAttribute('aria-hidden', 'false');
@@ -7116,7 +8126,6 @@
     if (mode === 'stocks') {
       // Stocks: asset-specific first, then general market links.
       if (asset && asset.type === 'stock' && asset.symbol) {
-        var stockTicker = String(asset.symbol || '').trim().toUpperCase();
         links.push({
           label: 'TradingView (' + asset.symbol + ')',
           href: 'https://www.tradingview.com/symbols/' + encodeURIComponent(asset.symbol) + '/',
@@ -7127,13 +8136,6 @@
           href: 'https://finviz.com/quote.ashx?t=' + encodeURIComponent(asset.symbol),
           note: 'Quote, news, and technical snapshot'
         });
-        if (stockTicker) {
-          links.push({
-            label: 'Reddit Search ($' + stockTicker + ')',
-            href: 'https://www.reddit.com/search/?q=' + encodeURIComponent('$' + stockTicker),
-            note: 'Ticker-specific Reddit discussions'
-          });
-        }
       }
       links.push({
         label: 'AskCharly Ratings',
@@ -7193,19 +8195,11 @@
     } else {
       // Crypto: token-specific first, then general market links.
       if (asset && asset.type === 'crypto') {
-        var cryptoTicker = String(asset.symbol || '').trim().toUpperCase();
         if (asset.coinId) {
           links.push({
             label: 'CoinGecko (' + asset.symbol + ')',
             href: 'https://www.coingecko.com/en/coins/' + encodeURIComponent(asset.coinId),
             note: 'Market data and coin overview'
-          });
-        }
-        if (cryptoTicker) {
-          links.push({
-            label: 'Reddit Search ($' + cryptoTicker + ')',
-            href: 'https://www.reddit.com/search/?q=' + encodeURIComponent('$' + cryptoTicker),
-            note: 'Token-specific Reddit discussions'
           });
         }
       }
@@ -7480,6 +8474,145 @@
   function applyApiDebugToggle() {
     state.app.apiDebugEnabled = !state.app.apiDebugEnabled;
     renderAll();
+  }
+
+  function normalizeApiDebugPanelPosition(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var left = Number(raw.left);
+    var top = Number(raw.top);
+    if (!isFinite(left) || !isFinite(top)) return null;
+    return { left: Math.round(left), top: Math.round(top) };
+  }
+
+  function apiDebugPanelSupportsDrag() {
+    return !!(window.matchMedia && window.matchMedia('(min-width: 981px)').matches);
+  }
+
+  function clearApiDebugPanelInlinePosition(panelEl) {
+    if (!panelEl) return;
+    panelEl.style.removeProperty('left');
+    panelEl.style.removeProperty('top');
+    panelEl.style.removeProperty('right');
+    panelEl.style.removeProperty('bottom');
+    panelEl.classList.remove('api-debug-panel--drag-enabled');
+  }
+
+  function clampApiDebugPanelPosition(left, top, width, height) {
+    var margin = 8;
+    var panelWidth = Math.max(120, Number(width) || 0);
+    var panelHeight = Math.max(80, Number(height) || 0);
+    var maxLeft = Math.max(margin, window.innerWidth - panelWidth - margin);
+    var maxTop = Math.max(margin, window.innerHeight - panelHeight - margin);
+    var nextLeft = Math.max(margin, Math.min(Number(left) || margin, maxLeft));
+    var nextTop = Math.max(margin, Math.min(Number(top) || margin, maxTop));
+    return {
+      left: Math.round(nextLeft),
+      top: Math.round(nextTop)
+    };
+  }
+
+  function applyApiDebugPanelPosition(position, persistPosition) {
+    if (!ui || !ui.el || !ui.el.apiDebugPanel) return null;
+    var panelEl = ui.el.apiDebugPanel;
+    if (!apiDebugPanelSupportsDrag()) {
+      clearApiDebugPanelInlinePosition(panelEl);
+      return null;
+    }
+    var rect = panelEl.getBoundingClientRect();
+    var width = Math.max(200, Math.round(rect.width || panelEl.offsetWidth || 0));
+    var height = Math.max(120, Math.round(rect.height || panelEl.offsetHeight || 0));
+    var normalized = normalizeApiDebugPanelPosition(position);
+    if (!normalized) {
+      normalized = clampApiDebugPanelPosition(window.innerWidth - width - 16, 100, width, height);
+    } else {
+      normalized = clampApiDebugPanelPosition(normalized.left, normalized.top, width, height);
+    }
+    panelEl.style.left = normalized.left + 'px';
+    panelEl.style.top = normalized.top + 'px';
+    panelEl.style.right = 'auto';
+    panelEl.style.bottom = 'auto';
+    panelEl.classList.add('api-debug-panel--drag-enabled');
+    if (persistPosition) {
+      state.app.apiDebugPanelPosition = { left: normalized.left, top: normalized.top };
+    }
+    return normalized;
+  }
+
+  function syncApiDebugPanelPosition() {
+    if (!ui || !ui.el || !ui.el.apiDebugPanel) return;
+    if (ui.el.apiDebugPanel.classList.contains('hidden')) return;
+    applyApiDebugPanelPosition(state.app.apiDebugPanelPosition, false);
+  }
+
+  function stopApiDebugPanelDrag(commit) {
+    if (!API_DEBUG_DRAG.active) return;
+    API_DEBUG_DRAG.active = false;
+    API_DEBUG_DRAG.pointerId = null;
+    window.removeEventListener('pointermove', onApiDebugPanelPointerMove);
+    window.removeEventListener('pointerup', onApiDebugPanelPointerUp);
+    window.removeEventListener('pointercancel', onApiDebugPanelPointerUp);
+    if (!ui || !ui.el || !ui.el.apiDebugPanel) return;
+    ui.el.apiDebugPanel.classList.remove('is-dragging');
+    if (commit) {
+      var saved = applyApiDebugPanelPosition(state.app.apiDebugPanelPosition || {
+        left: API_DEBUG_DRAG.left,
+        top: API_DEBUG_DRAG.top
+      }, true);
+      if (saved) persist();
+    }
+  }
+
+  function onApiDebugPanelPointerMove(event) {
+    if (!API_DEBUG_DRAG.active) return;
+    if (API_DEBUG_DRAG.pointerId != null && event.pointerId !== API_DEBUG_DRAG.pointerId) return;
+    if (!ui || !ui.el || !ui.el.apiDebugPanel) return;
+    var dx = Number(event.clientX || 0) - API_DEBUG_DRAG.startX;
+    var dy = Number(event.clientY || 0) - API_DEBUG_DRAG.startY;
+    var next = clampApiDebugPanelPosition(
+      API_DEBUG_DRAG.left + dx,
+      API_DEBUG_DRAG.top + dy,
+      API_DEBUG_DRAG.width,
+      API_DEBUG_DRAG.height
+    );
+    ui.el.apiDebugPanel.style.left = next.left + 'px';
+    ui.el.apiDebugPanel.style.top = next.top + 'px';
+    ui.el.apiDebugPanel.style.right = 'auto';
+    ui.el.apiDebugPanel.style.bottom = 'auto';
+    state.app.apiDebugPanelPosition = { left: next.left, top: next.top };
+    event.preventDefault();
+  }
+
+  function onApiDebugPanelPointerUp(event) {
+    if (!API_DEBUG_DRAG.active) return;
+    if (API_DEBUG_DRAG.pointerId != null && event.pointerId !== API_DEBUG_DRAG.pointerId) return;
+    stopApiDebugPanelDrag(true);
+  }
+
+  function beginApiDebugPanelDrag(event) {
+    if (!apiDebugPanelSupportsDrag()) return;
+    if (!ui || !ui.el || !ui.el.apiDebugPanel || ui.el.apiDebugPanel.classList.contains('hidden')) return;
+    if (event.button != null && event.button !== 0) return;
+    var handle = event.target && event.target.closest ? event.target.closest('.api-debug-panel__head') : null;
+    if (!handle) return;
+    var panelEl = ui.el.apiDebugPanel;
+    var rect = panelEl.getBoundingClientRect();
+    var current = applyApiDebugPanelPosition(state.app.apiDebugPanelPosition || {
+      left: rect.left,
+      top: rect.top
+    }, false) || { left: rect.left, top: rect.top };
+    API_DEBUG_DRAG.active = true;
+    API_DEBUG_DRAG.pointerId = event.pointerId != null ? event.pointerId : null;
+    API_DEBUG_DRAG.startX = Number(event.clientX || 0);
+    API_DEBUG_DRAG.startY = Number(event.clientY || 0);
+    API_DEBUG_DRAG.left = Number(current.left || rect.left || 0);
+    API_DEBUG_DRAG.top = Number(current.top || rect.top || 0);
+    API_DEBUG_DRAG.width = Math.max(200, Math.round(rect.width || panelEl.offsetWidth || 0));
+    API_DEBUG_DRAG.height = Math.max(120, Math.round(rect.height || panelEl.offsetHeight || 0));
+    panelEl.classList.add('is-dragging');
+    window.addEventListener('pointermove', onApiDebugPanelPointerMove);
+    window.addEventListener('pointerup', onApiDebugPanelPointerUp);
+    window.addEventListener('pointercancel', onApiDebugPanelPointerUp);
+    event.preventDefault();
   }
 
   function openAddModal(asset) {
@@ -7923,9 +9056,12 @@
     options = options || {};
     var key = 'quote:' + asset.type + ':' + (asset.coinId || asset.stooqSymbol || asset.symbol);
     if (asset.type === 'stock') {
-      return cacheWrap(key, 1000 * 60 * 60, function () {
+      var maxAgeMs = options.force ? 0 : (1000 * 60 * 60);
+      return cacheWrap(key, maxAgeMs, function () {
         return PT.StockAPI.getQuote(asset, {
-          skipYahooExtras: !!options.skipYahooExtras
+          skipYahooExtras: !!options.skipYahooExtras,
+          twelveDataPremarketFallback: !!options.twelveDataPremarketFallback,
+          force: !!options.force
         }).then(function (quote) {
           if (quote && !isFinite(Number(quote.fetchedAt))) quote.fetchedAt = Date.now();
           return quote;
@@ -8331,11 +9467,12 @@
       if (existing && existing.panel) return existing;
       var rawCode = String((err && err.message) || 'fundamentals_failed').trim() || 'fundamentals_failed';
       var friendly = normalizeFundamentalsErrorMessage(rawCode) || 'Fundamentals unavailable.';
+      var fallbackPanel = buildUnavailableFundamentalsPanel(asset, friendly);
       var errorSnapshot = Object.assign({}, existing || {}, {
         assetType: asset.type === 'crypto' ? 'crypto' : 'stock',
         symbol: asset.type === 'stock' ? String(asset.yahooSymbol || asset.symbol || '').trim().toUpperCase() : undefined,
         coinId: asset.type === 'crypto' ? String(asset.coinId || asset.id || '').trim().toLowerCase() : undefined,
-        panel: null,
+        panel: fallbackPanel,
         error: friendly,
         errorCode: rawCode,
         errorDetail: friendly,
@@ -8413,9 +9550,19 @@
     if (includeNews && options.onSelect && !Array.isArray(state.news[assetKey(asset)])) {
       hydrateAssetNewsFromCache(asset, 1000 * 60 * 60 * 24 * 3);
     }
+    var stockQuote = asset.type === 'stock'
+      ? (state.market.stocks[asset.id] || getCachedAny(stockQuoteCacheKey(asset)))
+      : null;
+    var hasSessionPrice = !!(stockQuote && (
+      isFinite(Number(stockQuote.preMarketPrice)) ||
+      isFinite(Number(stockQuote.postMarketPrice))
+    ));
+    var sessionCheckedAt = Number(stockQuote && stockQuote.sessionExtrasCheckedAt || 0);
+    var sessionCheckFresh = sessionCheckedAt > 0 && (Date.now() - sessionCheckedAt) <= (1000 * 60 * 60);
+    var needsSessionEnrichment = !!(asset.type === 'stock' && !hasSessionPrice && !sessionCheckFresh);
     var detailStampKey = assetDetailRefreshCacheKey(asset, includeNews);
     var needsNewsRefreshOnSelect = !!(includeNews && options.onSelect && asset.type === 'stock' && !hasFreshNews(asset, 1000 * 60 * 60));
-    if (hasFreshAssetDetail(asset, includeNews) && !needsNewsRefreshOnSelect) {
+    if (hasFreshAssetDetail(asset, includeNews) && !needsNewsRefreshOnSelect && !needsSessionEnrichment) {
       renderAll();
       setStatus('Using cached ' + asset.symbol + ' • ' + new Date().toLocaleTimeString());
       return Promise.resolve({ cached: true });
@@ -8425,7 +9572,9 @@
     var tasks = [];
     refreshAssetTwitter(asset);
     tasks.push(refreshAssetQuote(asset, {
-      skipYahooExtras: !!(options.onSelect && asset.type === 'stock')
+      skipYahooExtras: !!(options.onSelect && asset.type === 'stock' && !needsSessionEnrichment),
+      twelveDataPremarketFallback: !!(options.onSelect && asset.type === 'stock'),
+      force: !!(options.onSelect && needsSessionEnrichment)
     }), refreshAssetHistory(asset));
     if (asset.type === 'crypto') tasks.push(refreshCryptoGlobalMetrics());
     if (includeNews) {
@@ -9068,11 +10217,27 @@
         applyStockAllocationMode('sectors');
       });
     }
+    if (ui.el.allocationResetSectorsBtn) {
+      ui.el.allocationResetSectorsBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (ui.el.allocationResetSectorsBtn.disabled) return;
+        var modeItems = getModeComputedItems('stocks');
+        resetCustomSectorsForItems(modeItems);
+      });
+    }
     if (ui.el.openHoldingsPanelBtn) ui.el.openHoldingsPanelBtn.addEventListener('click', function () { openPanelViewer('holdings'); });
     if (ui.el.openAllocationPanelBtn) ui.el.openAllocationPanelBtn.addEventListener('click', function () { openPanelViewer('allocation'); });
     if (ui.el.openIndicatorsPanelBtn) ui.el.openIndicatorsPanelBtn.addEventListener('click', function () { openPanelViewer('indicators'); });
     if (ui.el.openFundamentalsPanelBtn) ui.el.openFundamentalsPanelBtn.addEventListener('click', function () { openPanelViewer('fundamentals'); });
     if (ui.el.openNewsPanelBtn) ui.el.openNewsPanelBtn.addEventListener('click', function () { openPanelViewer('news'); });
+    if (ui.el.mobileQuickSummaryGrid) {
+      ui.el.mobileQuickSummaryGrid.addEventListener('click', function (event) {
+        var trigger = event.target.closest('[data-summary-jump]');
+        if (!trigger) return;
+        event.preventDefault();
+        scrollToMobileQuickSummarySection(trigger.getAttribute('data-summary-jump'));
+      });
+    }
     if (ui.el.panelViewerCloseBtn) ui.el.panelViewerCloseBtn.addEventListener('click', closePanelViewer);
     if (ui.el.linkViewerCloseBtn) ui.el.linkViewerCloseBtn.addEventListener('click', closeDesktopLinkViewer);
     if (ui.el.indicatorExplorerCloseBtn) ui.el.indicatorExplorerCloseBtn.addEventListener('click', closeIndicatorExplorerModal);
@@ -9199,19 +10364,38 @@
       });
     }
     if (ui.el.apiDebugToggle) ui.el.apiDebugToggle.addEventListener('click', applyApiDebugToggle);
+    if (ui.el.apiDebugPanel) {
+      ui.el.apiDebugPanel.addEventListener('pointerdown', beginApiDebugPanelDrag);
+    }
     if (ui.el.holdingsPrivacyToggle) ui.el.holdingsPrivacyToggle.addEventListener('click', applyHoldingsPrivacyToggle);
     if (ui.el.holdingsScrambleToggle) ui.el.holdingsScrambleToggle.addEventListener('click', applyHoldingsScrambleToggle);
     if (ui.el.cryptoParticlesToggle) ui.el.cryptoParticlesToggle.addEventListener('click', applyCryptoParticlesToggle);
     if (ui.el.uiTransparencyToggle) ui.el.uiTransparencyToggle.addEventListener('click', applyUiTransparencyToggle);
     ui.el.addAssetBtn.addEventListener('click', function () { openAddModal(null); });
     ui.el.exportBtn.addEventListener('click', function () {
+      var explorerExport = buildIndicatorExplorerExportPayload();
       storage.exportPortfolioFile({
         exportedAt: new Date().toISOString(),
         portfolio: buildPortfolioPersistencePayload(),
-        settings: buildSettingsPayload()
+        settings: buildSettingsPayload(),
+        explorer: explorerExport,
+        explorerFavorites: explorerExport.favorites,
+        explorerFavoritesSort: explorerExport.favoritesSort
       });
       setStatus('Portfolio exported');
     });
+    if (ui.el.exportAnalysisBtn) {
+      ui.el.exportAnalysisBtn.addEventListener('click', exportAnalysisPdf);
+    }
+    if (ui.el.exportIndicatorsPdfBtn) {
+      ui.el.exportIndicatorsPdfBtn.addEventListener('click', exportIndicatorsPanelPdf);
+    }
+    if (ui.el.exportFundamentalsPdfBtn) {
+      ui.el.exportFundamentalsPdfBtn.addEventListener('click', exportFundamentalsPanelPdf);
+    }
+    if (ui.el.indicatorExplorerExportAnalysisBtn) {
+      ui.el.indicatorExplorerExportAnalysisBtn.addEventListener('click', exportAnalysisPdfFromExplorer);
+    }
     ui.el.importInput.addEventListener('change', function (e) {
       var file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -9229,6 +10413,7 @@
           state.app.activePortfolioStocks = state.app.activePortfolioStocks || 'main';
           state.app.activePortfolioCrypto = state.app.activePortfolioCrypto || 'main';
         }
+        applyImportedIndicatorExplorerPayload(payload);
         storage.clearDemoPortfolioBackup();
         state.market.stocks = {};
         state.market.crypto = {};
@@ -9301,6 +10486,12 @@
         var doneBtn = e.target.closest('#apiSourcesDoneBtn');
         if (doneBtn) {
           closeApiSourcesModal();
+          return;
+        }
+        var viewBtn = e.target.closest('[data-api-sources-view]');
+        if (viewBtn) {
+          var nextMode = String(viewBtn.getAttribute('data-api-sources-view') || '').trim().toLowerCase() === 'crypto' ? 'crypto' : 'stocks';
+          openApiSourcesModal(nextMode);
           return;
         }
       });
@@ -9552,6 +10743,21 @@
         submitPortfolioNameModal();
       });
     }
+    [ui.el.portfolioDeleteModalCloseBtn, ui.el.portfolioDeleteCancelBtn].forEach(function (btn) {
+      if (btn) btn.addEventListener('click', function () { closePortfolioDeleteModal(false); });
+    });
+    if (ui.el.portfolioDeleteConfirmBtn) {
+      ui.el.portfolioDeleteConfirmBtn.addEventListener('click', function () {
+        closePortfolioDeleteModal(true);
+      });
+    }
+    if (ui.el.portfolioDeleteModal) {
+      ui.el.portfolioDeleteModal.addEventListener('click', function (e) {
+        if (e.target && e.target.getAttribute('data-close-portfolio-delete-modal') === '1') {
+          closePortfolioDeleteModal(false);
+        }
+      });
+    }
     [ui.el.sectorEditModalCloseBtn, ui.el.sectorEditCancelBtn].forEach(function (btn) {
       if (btn) btn.addEventListener('click', closeSectorEditModal);
     });
@@ -9670,6 +10876,10 @@
         closeDesktopLinkViewer();
         return;
       }
+      if (ui.el.portfolioDeleteModal && !ui.el.portfolioDeleteModal.classList.contains('hidden')) {
+        closePortfolioDeleteModal(false);
+        return;
+      }
       if (ui.el.sectorResetModal && !ui.el.sectorResetModal.classList.contains('hidden')) {
         closeSectorResetModal(false);
         return;
@@ -9701,6 +10911,10 @@
       if (!ui.el.modal.classList.contains('hidden')) closeModal();
     });
     window.addEventListener('resize', function () {
+      if (!apiDebugPanelSupportsDrag()) {
+        stopApiDebugPanelDrag(false);
+      }
+      syncApiDebugPanelPosition();
       syncMobilePanelOrder();
       syncMobileFocusedRowAfterRender();
       if (!canOpenPanelViewer()) {

@@ -517,6 +517,26 @@ html[data-layout="wide"] .portfolio-grid {
   font-family: var(--font-display);
 }
 
+@media (min-width: 981px) {
+  #detailPanel > .detail-meta:empty {
+    visibility: hidden;
+    height: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  #detailPanel > .section-header {
+    margin-bottom: 0.4rem;
+  }
+
+  #detailPanel > #detailChartTimeframes {
+    margin-top: 0;
+    margin-bottom: 0.34rem;
+  }
+}
+
 .panel-block {
   background: var(--panel-2);
   border-radius: var(--radius-md);

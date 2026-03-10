@@ -490,7 +490,10 @@
     }
 
     var providerSector = normalizeProviderSector(meta.rawSector);
-    if (providerSector === UNKNOWN) providerSector = inferSectorFromIndustry(meta.rawIndustry || meta.finnhubIndustry);
+    if (providerSector === UNKNOWN) providerSector = inferSectorFromIndustry(meta.rawIndustry);
+    if (providerSector === UNKNOWN) providerSector = inferSectorFromIndustry(meta.finnhubIndustry);
+    // Explicit fallback for provider strings like "Technology" in finnhubIndustry.
+    if (providerSector === UNKNOWN) providerSector = normalizeProviderSector(meta.finnhubIndustry);
     var fallbackTheme = normalizeLabel(meta.rawIndustry || meta.finnhubIndustry, '') || (providerSector !== UNKNOWN ? providerSector : UNKNOWN_THEME);
     var fallbackScore = providerSector === UNKNOWN ? 0 : 1;
     return {

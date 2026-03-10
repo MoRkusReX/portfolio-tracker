@@ -131,9 +131,31 @@
     incrementFailed(key, triggerLabel);
   }
 
+  function formatUpdatedTime(ts) {
+    var value = Number(ts);
+    if (!(value > 0)) return '';
+    try {
+      return new Date(value).toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function resolveMetaLabel(tableBody) {
+    if (!tableBody || !tableBody.closest) return null;
+    var panel = tableBody.closest('#apiDebugPanel');
+    if (!panel) return null;
+    return panel.querySelector('.api-debug-panel__head .muted');
+  }
+
   function mount(tableBody) {
     if (!tableBody) return;
     var flashTimers = {};
+    var metaLabel = resolveMetaLabel(tableBody);
 
     function ensureRows(snapshot) {
       if (tableBody.children.length) return;
@@ -176,6 +198,12 @@
           flashRow(tr, row.key);
         }
       });
+      if (metaLabel) {
+        var updatedText = formatUpdatedTime(Date.now());
+        metaLabel.textContent = updatedText
+          ? ('Browser request count - Updated ' + updatedText)
+          : 'Browser request count';
+      }
     }
     listeners.push(render);
     render(getSnapshot(), null);

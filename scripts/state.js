@@ -214,6 +214,7 @@
       uiTransparencyEnabled: false,
       demoModeEnabled: false,
       apiDebugEnabled: false,
+      apiDebugPanelPosition: null,
       twelveDataEnabled: false,
       apiSourcePrefs: createDefaultApiSourcePrefs(),
       newsScopeStocks: 'general',
