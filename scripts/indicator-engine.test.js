@@ -406,113 +406,181 @@ function baseTradeSnapshot() {
   };
 }
 
-// Trade plan: bullish pullback setup.
+// 1) bullish pullback setup should generate a valid entry plan.
 let tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.values.atr14 = 2.1;
+tradeSnapshot.values.bbUpper = 114;
+tradeSnapshot.values.sr.pivot.r1 = 110;
+tradeSnapshot.values.sr.pivot.r2 = 113;
+tradeSnapshot.values.sr.donchian.resistance = 112;
+tradeSnapshot.values.sr.nearest.resistance = 109.8;
+tradeSnapshot.values.fib.levels.fib236 = 111.2;
 let tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
-assert.strictEqual(tradePlan.entryType, 'Trend Pullback Entry');
-assert.ok(Number.isFinite(tradePlan.entryZoneLow));
-assert.ok(Number.isFinite(tradePlan.entryZoneHigh));
+assert.strictEqual(tradePlan.available, true);
+assert.strictEqual(tradePlan.entryType, 'Pullback Entry');
+assert.ok(Number.isFinite(tradePlan.rewardPct) && tradePlan.rewardPct >= 5);
+assert.ok(Number.isFinite(tradePlan.rr) && tradePlan.rr >= 1.5);
 
-// Trade plan: bounce setup.
+// 2) bounce setup near support should generate a valid plan when reward >= 5%.
 tradeSnapshot = baseTradeSnapshot();
 tradeSnapshot.trendMeter.label = 'Neutral';
 tradeSnapshot.statuses.ema = 'Neutral';
 tradeSnapshot.statuses.macd = 'Neutral';
-tradeSnapshot.values.rsi14 = 34;
 tradeSnapshot.reversal.score = 3;
-tradeSnapshot.reversal.label = 'Strong bounce potential';
+tradeSnapshot.values.rsi14 = 39;
+tradeSnapshot.values.macdHistogram = -0.2;
+tradeSnapshot.values.sr.nearest.support = 97.5;
+tradeSnapshot.values.reversal.supportZone = 97.2;
+tradeSnapshot.values.sr.nearest.resistance = 106.8;
+tradeSnapshot.values.sr.donchian.resistance = 107.2;
+tradeSnapshot.values.bbUpper = 108.1;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
 assert.strictEqual(tradePlan.entryType, 'Bounce Entry');
+assert.ok(Number.isFinite(tradePlan.rewardPct) && tradePlan.rewardPct >= 5);
 
-// Trade plan: breakout setup.
+// 3) breakout setup should generate a valid plan when room above is sufficient.
 tradeSnapshot = baseTradeSnapshot();
-tradeSnapshot.close = 103.9;
-tradeSnapshot.values.rsi14 = 66;
-tradeSnapshot.values.adx14 = 33;
-tradeSnapshot.values.sr.nearest.resistanceDistancePct = 0.4;
-tradeSnapshot.values.sr.nearest.supportDistancePct = -4.2;
-tradeSnapshot.values.sr.donchian.midpoint = 100.2;
-tradeSnapshot.values.sr.donchian.resistance = 104.2;
-tradeSnapshot.values.ema20 = 101;
-tradeSnapshot.values.ema50 = 98;
-tradeSnapshot.emaPosition.label = 'Strong Bullish';
+tradeSnapshot.close = 104.8;
+tradeSnapshot.values.rsi14 = 63;
+tradeSnapshot.values.adx14 = 27;
+tradeSnapshot.values.sr.nearest.resistance = 105.4;
+tradeSnapshot.values.sr.nearest.resistanceDistancePct = 0.6;
+tradeSnapshot.values.sr.donchian.resistance = 105.6;
+tradeSnapshot.values.sr.pivot.r1 = null;
+tradeSnapshot.values.sr.pivot.r2 = 112.4;
+tradeSnapshot.values.bbUpper = 114.2;
+tradeSnapshot.values.fib.levels.fib236 = null;
+tradeSnapshot.values.ema20 = 110.0;
+tradeSnapshot.values.ema50 = 103.2;
+tradeSnapshot.values.ema200 = 101.8;
+tradeSnapshot.values.sr.pivot.p = 109.2;
+tradeSnapshot.values.sr.donchian.midpoint = 110.1;
+tradeSnapshot.values.sr.nearest.support = null;
+tradeSnapshot.values.sr.pivot.s1 = null;
+tradeSnapshot.values.sr.pivot.s2 = null;
+tradeSnapshot.values.sr.donchian.support = null;
+tradeSnapshot.values.fib.levels.fib382 = null;
+tradeSnapshot.values.fib.levels.fib500 = null;
+tradeSnapshot.values.fib.levels.fib618 = null;
+tradeSnapshot.values.fib.levels.fib786 = null;
+tradeSnapshot.values.bbLower = null;
+tradeSnapshot.values.reversal.supportZone = null;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
 assert.strictEqual(tradePlan.entryType, 'Breakout Entry');
+assert.ok(Number.isFinite(tradePlan.rewardPct) && tradePlan.rewardPct >= 5);
 
-// Trade plan: take-profit exit.
+// 4) invalid entry >= take-profit must reject.
+let validation = engine.validateTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  takeProfitZone: { zoneLow: 99, zoneHigh: 100 },
+  failureExitZone: { zoneLow: 95, zoneHigh: 96 }
+}, 'stock', '1d');
+assert.strictEqual(validation.valid, false);
+assert.match(String(validation.reason), /invalid zone ordering/);
+
+// 5) invalid plan with reward < 5% must reject.
+validation = engine.validateTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 100.5 },
+  takeProfitZone: { zoneLow: 103.5, zoneHigh: 104.0 },
+  failureExitZone: { zoneLow: 97.0, zoneHigh: 97.5 }
+}, 'stock', '1d');
+assert.strictEqual(validation.valid, false);
+assert.match(String(validation.reason), /upside too small|take-profit too close to entry/);
+
+// 6) invalid plan with rr < 1.5 must reject.
+validation = engine.validateTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  takeProfitZone: { zoneLow: 106, zoneHigh: 107 }, // ~6%
+  failureExitZone: { zoneLow: 92, zoneHigh: 93 }   // ~8%
+}, 'stock', '1d');
+assert.strictEqual(validation.valid, false);
+assert.match(String(validation.reason), /reward\/risk too weak/);
+
+// 7) moderate-quality but valid plan should be Caution/Moderate, not No setup.
+tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.trendMeter.label = 'Neutral';
+tradeSnapshot.trendMeter.timeframeScore = 1;
+tradeSnapshot.statuses.ema = 'Neutral';
+tradeSnapshot.statuses.macd = 'Neutral';
+tradeSnapshot.values.adx14 = 16;
+tradeSnapshot.values.volumeConfirmation = { status: 'Neutral' };
+tradeSnapshot.reversal.score = 2;
+tradeSnapshot.values.rsi14 = 48;
+tradeSnapshot.values.ema20 = null;
+tradeSnapshot.values.ema50 = 95;
+tradeSnapshot.values.ema200 = 92;
+tradeSnapshot.values.sr.pivot.p = null;
+tradeSnapshot.values.sr.donchian.midpoint = null;
+tradeSnapshot.values.sr.donchian.support = null;
+tradeSnapshot.values.sr.pivot.s1 = null;
+tradeSnapshot.values.sr.pivot.s2 = null;
+tradeSnapshot.values.fib.levels.fib382 = null;
+tradeSnapshot.values.fib.levels.fib500 = null;
+tradeSnapshot.values.fib.levels.fib618 = null;
+tradeSnapshot.values.fib.levels.fib786 = null;
+tradeSnapshot.values.sr.nearest.support = 99.5;
+tradeSnapshot.values.reversal.supportZone = 99.5;
+tradeSnapshot.values.sr.nearest.resistance = 107.5;
+tradeSnapshot.values.sr.donchian.resistance = 108.0;
+tradeSnapshot.values.bbUpper = 108.2;
+tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
+assert.ok(['Caution', 'Moderate'].indexOf(String(tradePlan.confidence)) !== -1);
+
+// 8) strong-quality plan should be Strong.
 tradeSnapshot = baseTradeSnapshot();
 tradeSnapshot.trendMeter.label = 'Bullish';
+tradeSnapshot.trendMeter.timeframeScore = 5;
+tradeSnapshot.values.adx14 = 32;
+tradeSnapshot.statuses.macd = 'Bullish';
+tradeSnapshot.values.volumeConfirmation = { status: 'Bullish confirmation' };
+tradeSnapshot.values.rsi14 = 62;
+tradeSnapshot.reversal.score = 0;
+tradeSnapshot.values.sr.nearest.resistance = 112;
+tradeSnapshot.values.sr.donchian.resistance = 113.5;
+tradeSnapshot.values.bbUpper = 115;
+tradeSnapshot.values.sr.pivot.r1 = null;
+tradeSnapshot.values.sr.pivot.r2 = null;
+tradeSnapshot.values.fib.levels.fib236 = null;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
-assert.strictEqual(tradePlan.takeProfitType, 'Take Profit Zone');
-assert.ok(Number.isFinite(tradePlan.takeProfitZoneLow));
-assert.ok(Number.isFinite(tradePlan.takeProfitZoneHigh));
-assert.ok(tradePlan.takeProfitZoneLow > tradeSnapshot.close);
-assert.ok(tradePlan.takeProfitZoneHigh > tradeSnapshot.close);
-assert.ok(Number.isFinite(tradePlan.failureExitZoneLow));
-assert.ok(Number.isFinite(tradePlan.failureExitZoneHigh));
-assert.ok(tradePlan.failureExitZoneLow < tradeSnapshot.close);
-assert.ok(tradePlan.failureExitZoneHigh < tradeSnapshot.close);
+assert.strictEqual(tradePlan.available, true);
+assert.strictEqual(String(tradePlan.confidence), 'Strong');
 
-// Trade plan: defensive exit.
+// 9) holder-only mode should still show exits when fresh entry fails (<5% upside).
 tradeSnapshot = baseTradeSnapshot();
-tradeSnapshot.trendMeter.label = 'Bearish';
-tradeSnapshot.statuses.ema = 'Bearish';
-tradeSnapshot.statuses.macd = 'Bearish';
-tradeSnapshot.values.volumeConfirmation.status = 'Bearish confirmation';
+tradeSnapshot.close = 100;
+tradeSnapshot.values.sr.nearest.resistance = 101.8;
+tradeSnapshot.values.sr.donchian.resistance = 102.0;
+tradeSnapshot.values.sr.pivot.r1 = 102.1;
+tradeSnapshot.values.bbUpper = 102.3;
+tradeSnapshot.values.ema20 = 100.1;
+tradeSnapshot.values.ema50 = 99.3;
+tradeSnapshot.values.ema200 = 98.0;
+tradeSnapshot.values.sr.pivot.p = 100.1;
+tradeSnapshot.values.sr.nearest.support = 99.4;
+tradeSnapshot.values.sr.donchian.midpoint = 100.2;
+tradeSnapshot.values.sr.donchian.support = 99.0;
+tradeSnapshot.values.sr.pivot.s1 = 99.1;
+tradeSnapshot.values.sr.pivot.s2 = 98.7;
+tradeSnapshot.values.fib.levels.fib382 = 99.8;
+tradeSnapshot.values.fib.levels.fib500 = 99.4;
+tradeSnapshot.values.fib.levels.fib618 = 99.0;
+tradeSnapshot.values.fib.levels.fib786 = 98.6;
+tradeSnapshot.values.bbLower = 99.0;
+tradeSnapshot.values.reversal.supportZone = 99.3;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
-assert.strictEqual(tradePlan.failureExitType, 'Trend Failure Exit');
+assert.strictEqual(tradePlan.available, true);
+assert.strictEqual(tradePlan.entryType, 'No setup');
+assert.ok(String(tradePlan.takeProfitType).toLowerCase().indexOf('take profit') !== -1);
+assert.ok(
+  String(tradePlan.failureExitType).toLowerCase().indexOf('failure') !== -1 ||
+  String(tradePlan.failureExitType).toLowerCase().indexOf('no clear failure exit') !== -1
+);
+assert.strictEqual(tradePlan.rr, null);
 
-// Trade plan: weak case (no take-profit, only failure exit).
-tradeSnapshot = baseTradeSnapshot();
-tradeSnapshot.close = 111;
-tradeSnapshot.values.sr.nearest.resistance = 105;
-tradeSnapshot.values.sr.donchian.resistance = 106;
-tradeSnapshot.values.bbUpper = 108;
-tradeSnapshot.values.fib.levels.fib236 = 104;
-tradeSnapshot.values.sr.pivot.r1 = 103;
-tradeSnapshot.values.sr.pivot.r2 = 104;
-tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
-assert.strictEqual(tradePlan.takeProfitType, 'No clear take-profit zone');
-assert.strictEqual(tradePlan.failureExitType, 'Trend Failure Exit');
-assert.ok(Number.isFinite(tradePlan.failureExitZoneLow));
-assert.ok(Number.isFinite(tradePlan.failureExitZoneHigh));
-assert.ok(tradePlan.failureExitZoneHigh < tradeSnapshot.close);
-
-// Trade plan: invalid-zone prevention.
-tradeSnapshot = {
-  close: 100,
-  timeKey: '1d',
-  values: {
-    ema20: 100,
-    ema50: null,
-    ema200: null,
-    rsi14: 58,
-    macdLine: 0.2,
-    macdSignal: 0.1,
-    macdHistogram: 0.1,
-    bbUpper: null,
-    bbLower: null,
-    adx14: 26,
-    volumeConfirmation: { status: 'Bullish confirmation' },
-    fib: { available: false, levels: null },
-    sr: {
-      pivot: { r1: null, r2: null, s1: null, s2: null },
-      donchian: { resistance: null, support: null, midpoint: null },
-      nearest: { resistance: 100.2, support: 99.8 }
-    },
-    reversal: { nearSupport: true, macdHistogramRising: true, supportZone: null }
-  },
-  statuses: { ema: 'Bullish', macd: 'Bullish', rsi: 'Neutral', bollinger: 'Neutral', sr: 'Neutral' },
-  trendMeter: { label: 'Bullish', timeframeScore: 3 },
-  reversal: { score: 2, reasons: [] },
-  emaPosition: { label: 'Pullback' },
-  overall: 'Bullish'
-};
-tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
-assert.strictEqual(tradePlan.takeProfitType, 'No clear take-profit zone');
-assert.strictEqual(tradePlan.failureExitType, 'No clear failure exit');
-
-// Trade plan: no setup.
+// baseline no-setup sanity case.
 tradeSnapshot = {
   close: 100,
   timeKey: '1d',
@@ -526,6 +594,7 @@ tradeSnapshot = {
     macdHistogram: 0,
     bbUpper: null,
     bbLower: null,
+    atr14: null,
     adx14: null,
     volumeConfirmation: { status: 'Neutral' },
     fib: { available: false, levels: null },
@@ -549,7 +618,6 @@ tradeSnapshot = {
 };
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
 assert.strictEqual(tradePlan.entryType, 'No setup');
-assert.strictEqual(tradePlan.exitType, 'No setup');
 assert.strictEqual(tradePlan.available, false);
 
 console.log('indicator-engine tests passed');

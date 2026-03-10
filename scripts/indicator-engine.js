@@ -234,15 +234,15 @@
     { key: 'fib786', ratio: 0.786, label: '78.6%' }
   ];
   var FIB_MIN_HISTORY = 20;
-  var ANALYZE_SCHEMA_VERSION = 6;
+  var ANALYZE_SCHEMA_VERSION = 7;
   var SR_MIDPOINT_TOLERANCE_PCT = 0.005;
-  var TRADE_ZONE_TOLERANCE_STOCK = 0.0075;
-  var TRADE_ZONE_TOLERANCE_CRYPTO = 0.0125;
+  var TRADE_ZONE_TOLERANCE_STOCK = 0.01; // Relaxed from 0.75% to 1.00% to reduce empty plans
+  var TRADE_ZONE_TOLERANCE_CRYPTO = 0.015; // Relaxed from 1.25% to 1.50% to reduce empty plans
   var TRADE_SINGLE_LEVEL_BAND_STOCK = 0.0075;
   var TRADE_SINGLE_LEVEL_BAND_CRYPTO = 0.0125;
   var BREAKOUT_BAND_STOCK = { low: 0.0025, high: 0.01 };
   var BREAKOUT_BAND_CRYPTO = { low: 0.004, high: 0.015 };
-  var TRADE_LEVEL_WEIGHTS = {
+  var TRADE_LEVEL_WEIGHTS_DEFAULT = {
     ema20: 2,
     ema50: 3,
     ema200: 3,
@@ -264,6 +264,89 @@
     bbLower: 3,
     bbUpper: 3,
     supportZone: 2
+  };
+  var TRADE_LEVEL_WEIGHTS_BY_TIMEFRAME = {
+    '1d': {
+      ema20: 3,
+      ema50: 3,
+      ema200: 2,
+      pivotP: 2,
+      s1: 2,
+      s2: 1,
+      r1: 2,
+      r2: 1,
+      donchianSupport: 3,
+      donchianResistance: 3,
+      donchianMidpoint: 2,
+      nearestSupport: 3,
+      nearestResistance: 3,
+      fib236: 2,
+      fib382: 3,
+      fib500: 3,
+      fib618: 3,
+      fib786: 2,
+      bbLower: 3,
+      bbUpper: 3,
+      supportZone: 3
+    },
+    '1w': {
+      ema20: 2,
+      ema50: 3,
+      ema200: 3,
+      pivotP: 2,
+      s1: 2,
+      s2: 1,
+      r1: 2,
+      r2: 1,
+      donchianSupport: 3,
+      donchianResistance: 3,
+      donchianMidpoint: 2,
+      nearestSupport: 3,
+      nearestResistance: 3,
+      fib236: 2,
+      fib382: 3,
+      fib500: 3,
+      fib618: 3,
+      fib786: 2,
+      bbLower: 2,
+      bbUpper: 2,
+      supportZone: 2
+    },
+    '1m': {
+      ema20: 1,
+      ema50: 2,
+      ema200: 4,
+      pivotP: 1,
+      s1: 1,
+      s2: 1,
+      r1: 1,
+      r2: 1,
+      donchianSupport: 4,
+      donchianResistance: 4,
+      donchianMidpoint: 3,
+      nearestSupport: 4,
+      nearestResistance: 4,
+      fib236: 1,
+      fib382: 2,
+      fib500: 4,
+      fib618: 4,
+      fib786: 3,
+      bbLower: 1,
+      bbUpper: 1,
+      supportZone: 3
+    }
+  };
+  var TRADE_MIN_REWARD_PCT = {
+    stock: { '1d': 5, '1w': 5, '1m': 5, defaultValue: 5 },
+    crypto: { '1d': 5, '1w': 5, '1m': 5, defaultValue: 5 }
+  };
+  var TRADE_MIN_RR = {
+    stock: 1.5,
+    crypto: 1.5
+  };
+  var TRADE_CLOSE_GUARD_PCT = {
+    stock: 5.0,
+    crypto: 5.0
   };
 
   function fibonacciLookbackFor(timeKey, assetType, availableCount) {
@@ -682,6 +765,46 @@
     };
   }
 
+  function atr(highs, lows, closes, period) {
+    var h = Array.isArray(highs) ? highs : [];
+    var l = Array.isArray(lows) ? lows : [];
+    var c = Array.isArray(closes) ? closes : [];
+    var len = Math.min(h.length, l.length, c.length);
+    var p = Math.max(2, Number(period) || 14);
+    var out = new Array(len).fill(null);
+    if (len <= p) return out;
+    var tr = new Array(len).fill(null);
+    for (var i = 1; i < len; i++) {
+      var high = toNumber(h[i]);
+      var low = toNumber(l[i]);
+      var prevClose = toNumber(c[i - 1]);
+      if (high == null || low == null || prevClose == null) continue;
+      tr[i] = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    }
+    var sum = 0;
+    var valid = 0;
+    for (i = 1; i <= p; i++) {
+      var t = toNumber(tr[i]);
+      if (t == null) continue;
+      sum += t;
+      valid += 1;
+    }
+    if (!valid) return out;
+    var first = sum / valid;
+    out[p] = first;
+    var prevAtr = first;
+    for (i = p + 1; i < len; i++) {
+      var nextTr = toNumber(tr[i]);
+      if (nextTr == null) {
+        out[i] = null;
+        continue;
+      }
+      prevAtr = ((prevAtr * (p - 1)) + nextTr) / p;
+      out[i] = prevAtr;
+    }
+    return out;
+  }
+
   function classifyAdx(adxValue) {
     var adxNum = toNumber(adxValue);
     if (adxNum == null) return 'n/a';
@@ -955,16 +1078,83 @@
     return String(assetType || 'stock').toLowerCase() === 'crypto' ? 'crypto' : 'stock';
   }
 
-  function zoneTolerancePctForAsset(assetType) {
-    return normalizeAssetType(assetType) === 'crypto' ? TRADE_ZONE_TOLERANCE_CRYPTO : TRADE_ZONE_TOLERANCE_STOCK;
+  function normalizeTimeframeKey(timeframe) {
+    var key = String(timeframe || '1d').toLowerCase();
+    if (key === '1w' || key === '1m') return key;
+    return '1d';
   }
 
-  function singleLevelBandPctForAsset(assetType) {
-    return normalizeAssetType(assetType) === 'crypto' ? TRADE_SINGLE_LEVEL_BAND_CRYPTO : TRADE_SINGLE_LEVEL_BAND_STOCK;
+  function getLevelWeightsForTimeframe(timeframe) {
+    var key = normalizeTimeframeKey(timeframe);
+    var base = TRADE_LEVEL_WEIGHTS_DEFAULT;
+    var scoped = TRADE_LEVEL_WEIGHTS_BY_TIMEFRAME[key] || {};
+    var out = {};
+    Object.keys(base).forEach(function (name) {
+      var scopedValue = toNumber(scoped[name]);
+      out[name] = scopedValue != null ? Math.max(1, scopedValue) : base[name];
+    });
+    return out;
   }
 
-  function breakoutBandForAsset(assetType) {
-    return normalizeAssetType(assetType) === 'crypto' ? BREAKOUT_BAND_CRYPTO : BREAKOUT_BAND_STOCK;
+  function clamp(value, min, max) {
+    var n = Number(value);
+    if (!isFinite(n)) return min;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function computeAtrPct(values, close) {
+    var atr14 = toNumber(values && values.atr14);
+    var currentClose = toNumber(close);
+    if (atr14 == null || currentClose == null || currentClose <= 0) return null;
+    return (atr14 / currentClose) * 100;
+  }
+
+  function zoneTolerancePctForAsset(assetType, atrPct) {
+    var mode = normalizeAssetType(assetType);
+    var atr = toNumber(atrPct);
+    if (mode === 'crypto') {
+      var cryptoTol = Math.max(1.25, atr != null ? (0.50 * atr) : 1.25);
+      return clamp(cryptoTol, 1.25, 3.5);
+    }
+    var stockTol = Math.max(0.75, atr != null ? (0.35 * atr) : 0.75);
+    return clamp(stockTol, 0.75, 2.0);
+  }
+
+  function zoneHalfWidthPctForAsset(assetType, atrPct) {
+    var atrComponent = toNumber(atrPct);
+    if (normalizeAssetType(assetType) === 'crypto') {
+      var dynamicCrypto = atrComponent != null ? (0.50 * atrComponent) : 0;
+      return clamp(Math.max(0.80, dynamicCrypto), 0.80, 2.50);
+    }
+    var dynamicStock = atrComponent != null ? (0.35 * atrComponent) : 0;
+    return clamp(Math.max(0.40, dynamicStock), 0.40, 1.50);
+  }
+
+  function breakoutBandPctForAsset(assetType, atrPct) {
+    var atrComponent = toNumber(atrPct);
+    if (normalizeAssetType(assetType) === 'crypto') {
+      return {
+        low: Math.max(0.35, atrComponent != null ? (0.25 * atrComponent) : 0.35),
+        high: Math.max(1.25, atrComponent != null ? (0.80 * atrComponent) : 1.25)
+      };
+    }
+    return {
+      low: Math.max(0.20, atrComponent != null ? (0.20 * atrComponent) : 0.20),
+      high: Math.max(0.80, atrComponent != null ? (0.60 * atrComponent) : 0.80)
+    };
+  }
+
+  function tradeThresholds(assetType, timeframe) {
+    var mode = normalizeAssetType(assetType);
+    var key = normalizeTimeframeKey(timeframe);
+    var rewardCfg = TRADE_MIN_REWARD_PCT[mode] || TRADE_MIN_REWARD_PCT.stock;
+    var minRewardPct = toNumber(rewardCfg[key]);
+    if (minRewardPct == null) minRewardPct = toNumber(rewardCfg.defaultValue);
+    return {
+      minRewardPct: minRewardPct != null ? minRewardPct : 5,
+      minRR: toNumber(TRADE_MIN_RR[mode]) || 1.5,
+      minTakeProfitDistancePct: toNumber(TRADE_CLOSE_GUARD_PCT[mode]) || 5
+    };
   }
 
   function uniqueStrings(list) {
@@ -972,8 +1162,7 @@
     var out = [];
     (Array.isArray(list) ? list : []).forEach(function (item) {
       var text = String(item || '').trim();
-      if (!text) return;
-      if (seen[text]) return;
+      if (!text || seen[text]) return;
       seen[text] = true;
       out.push(text);
     });
@@ -999,12 +1188,7 @@
       if (typeof entry === 'number') {
         var n = toNumber(entry);
         if (n != null && n > 0) {
-          out.push({
-            value: n,
-            key: 'level',
-            reason: 'Level',
-            weight: 1
-          });
+          out.push({ value: n, key: 'level', reason: 'Level', weight: 1 });
         }
         return;
       }
@@ -1020,12 +1204,24 @@
     return out;
   }
 
-  function buildConfluenceZone(levels, assetType, zoneType, options) {
+  function buildConfluenceZone(levels, assetType, zoneType, atrPct, timeframe, options) {
     var candidates = normalizeCandidateLevels(levels);
     if (!candidates.length) return null;
     var opts = options || {};
-    var tolerancePct = zoneTolerancePctForAsset(assetType);
+    var atrPercent = toNumber(atrPct);
+    if (arguments.length <= 4 && atrPct && typeof atrPct === 'object' && !Array.isArray(atrPct)) {
+      opts = atrPct;
+      atrPercent = toNumber(opts.atrPct);
+    }
+    if (timeframe && typeof timeframe === 'object' && !Array.isArray(timeframe)) {
+      opts = timeframe;
+    }
+    if (atrPercent == null) atrPercent = toNumber(opts.atrPct);
+    var tolerancePct = zoneTolerancePctForAsset(assetType, atrPercent);
+    var toleranceRatio = tolerancePct / 100;
     var referencePrice = toNumber(opts.referencePrice);
+    var halfWidthPct = tolerancePct;
+
     candidates.sort(function (a, b) { return a.value - b.value; });
     var clusters = [];
     candidates.forEach(function (item) {
@@ -1042,16 +1238,17 @@
         });
         return;
       }
-      var basis = Math.max(cluster.high, 1e-9);
+      var basis = Math.max(cluster.center || cluster.high, 1e-9);
       var deltaPct = Math.abs(item.value - cluster.high) / basis;
-      if (deltaPct <= tolerancePct) {
+      if (deltaPct <= toleranceRatio) {
         cluster.low = Math.min(cluster.low, item.value);
         cluster.high = Math.max(cluster.high, item.value);
-        cluster.weight += item.weight;
+        cluster.weight += Math.max(1, Number(item.weight) || 1);
         cluster.count += 1;
-        cluster.weightedSum += item.value * item.weight;
-        cluster.weightSum += item.weight;
+        cluster.weightedSum += item.value * Math.max(1, Number(item.weight) || 1);
+        cluster.weightSum += Math.max(1, Number(item.weight) || 1);
         cluster.items.push(item);
+        cluster.center = cluster.weightSum > 0 ? (cluster.weightedSum / cluster.weightSum) : ((cluster.low + cluster.high) / 2);
         return;
       }
       clusters.push({
@@ -1065,48 +1262,56 @@
       });
     });
     if (!clusters.length) return null;
+
     clusters.forEach(function (cluster) {
       var center = cluster.weightSum > 0 ? (cluster.weightedSum / cluster.weightSum) : ((cluster.low + cluster.high) / 2);
       cluster.center = center;
-      cluster.score = cluster.weight + ((cluster.count - 1) * 0.85);
+      cluster.structuralImportance = cluster.weight;
+      cluster.score = cluster.weight + ((cluster.count - 1) * 1.0);
       cluster.distanceToRef = referencePrice != null ? Math.abs(center - referencePrice) : Infinity;
     });
+
     clusters.sort(function (a, b) {
       if (b.score !== a.score) return b.score - a.score;
       if (b.count !== a.count) return b.count - a.count;
+      if (b.structuralImportance !== a.structuralImportance) return b.structuralImportance - a.structuralImportance;
       if (a.distanceToRef !== b.distanceToRef) return a.distanceToRef - b.distanceToRef;
       return b.center - a.center;
     });
+
     var selected = clusters[0];
     if (!selected) return null;
     var representativeLevel = selected.center;
     var zoneLow = selected.low;
     var zoneHigh = selected.high;
     var zoneKind = String(zoneType || 'support').toLowerCase();
-    if (zoneKind === 'breakout') {
-      var breakoutBand = breakoutBandForAsset(assetType);
-      var breakoutBase = Math.max(selected.high, representativeLevel);
-      zoneLow = breakoutBase * (1 + breakoutBand.low);
-      zoneHigh = breakoutBase * (1 + breakoutBand.high);
-    } else if (selected.count === 1) {
-      var singleBand = singleLevelBandPctForAsset(assetType);
-      zoneLow = representativeLevel * (1 - singleBand);
-      zoneHigh = representativeLevel * (1 + singleBand);
+    if (selected.count === 1) {
+      zoneLow = representativeLevel * (1 - (halfWidthPct / 100));
+      zoneHigh = representativeLevel * (1 + (halfWidthPct / 100));
     } else {
-      var minimumBand = representativeLevel * singleLevelBandPctForAsset(assetType) * 0.35;
+      var minimumBand = representativeLevel * (halfWidthPct / 100) * 0.8;
       if ((zoneHigh - zoneLow) < minimumBand) {
         var mid = (zoneLow + zoneHigh) / 2;
         zoneLow = mid - (minimumBand / 2);
         zoneHigh = mid + (minimumBand / 2);
       }
     }
+    if (zoneKind === 'breakout') {
+      var breakoutBand = breakoutBandPctForAsset(assetType, atrPercent);
+      var breakoutBase = Math.max(selected.high, representativeLevel);
+      zoneLow = Math.max(zoneLow, breakoutBase * (1 + (breakoutBand.low / 100)));
+      zoneHigh = Math.max(zoneHigh, breakoutBase * (1 + (breakoutBand.high / 100)));
+    }
+
     if (!(isFinite(zoneLow) && isFinite(zoneHigh)) || zoneLow <= 0 || zoneHigh <= 0 || zoneHigh < zoneLow) return null;
     return {
       zoneLow: zoneLow,
       zoneHigh: zoneHigh,
+      zoneMid: midpoint(zoneLow, zoneHigh),
       representativeLevel: representativeLevel,
       confluenceCount: selected.count,
       totalWeight: selected.weight,
+      structuralImportance: selected.weight,
       score: selected.score,
       reasons: uniqueStrings(selected.items.map(function (item) { return item.reason; })),
       levelKeys: uniqueStrings(selected.items.map(function (item) { return item.key; })),
@@ -1121,190 +1326,196 @@
     };
   }
 
-  function collectEntryCandidates(indicators, timeframe, assetType) {
-    var snapshot = indicators || {};
-    var values = snapshot.values || {};
-    var sr = values.sr || {};
-    var pivot = sr.pivot || {};
-    var donchian = sr.donchian || {};
-    var nearest = sr.nearest || {};
-    var fib = values.fib || {};
-    var fibLevels = fib.levels || {};
-    var reversal = values.reversal || {};
-    var close = toNumber(snapshot.close);
-    var tolerance = zoneTolerancePctForAsset(assetType);
-    var nearAllowance = close != null ? (close * (1 + (tolerance * 0.7))) : null;
-    var out = {
-      trendPullback: [],
-      bounce: [],
-      breakout: []
-    };
-    function pushSupportIfNear(arr, value, key, reason, weight) {
-      var n = toNumber(value);
-      if (n == null || n <= 0) return;
-      if (close == null || n <= nearAllowance) pushCandidate(arr, n, key, reason, weight);
-    }
-    function pushBreakoutIfNear(arr, value, key, reason, weight) {
-      var n = toNumber(value);
-      if (n == null || n <= 0) return;
-      if (close == null || n >= (close * (1 - (tolerance * 0.3)))) pushCandidate(arr, n, key, reason, weight);
-    }
-
-    pushSupportIfNear(out.trendPullback, values.ema20, 'ema20', 'EMA20 trend support', TRADE_LEVEL_WEIGHTS.ema20);
-    pushSupportIfNear(out.trendPullback, values.ema50, 'ema50', 'EMA50 support', TRADE_LEVEL_WEIGHTS.ema50);
-    pushSupportIfNear(out.trendPullback, fibLevels.fib382, 'fib382', 'Fib 38.2 support', TRADE_LEVEL_WEIGHTS.fib382);
-    pushSupportIfNear(out.trendPullback, fibLevels.fib500, 'fib500', 'Fib 50 support', TRADE_LEVEL_WEIGHTS.fib500);
-    pushSupportIfNear(out.trendPullback, pivot.p, 'pivotP', 'Pivot P', TRADE_LEVEL_WEIGHTS.pivotP);
-    pushSupportIfNear(out.trendPullback, donchian.midpoint, 'donchianMidpoint', 'Donchian midpoint', TRADE_LEVEL_WEIGHTS.donchianMidpoint);
-
-    pushSupportIfNear(out.bounce, nearest.support, 'nearestSupport', 'Nearest support', TRADE_LEVEL_WEIGHTS.nearestSupport);
-    pushSupportIfNear(out.bounce, pivot.s1, 's1', 'Pivot S1', TRADE_LEVEL_WEIGHTS.s1);
-    pushSupportIfNear(out.bounce, pivot.s2, 's2', 'Pivot S2', TRADE_LEVEL_WEIGHTS.s2);
-    pushSupportIfNear(out.bounce, fibLevels.fib618, 'fib618', 'Fib 61.8 support', TRADE_LEVEL_WEIGHTS.fib618);
-    pushSupportIfNear(out.bounce, fibLevels.fib786, 'fib786', 'Fib 78.6 support', TRADE_LEVEL_WEIGHTS.fib786);
-    pushSupportIfNear(out.bounce, values.bbLower, 'bbLower', 'Lower Bollinger band', TRADE_LEVEL_WEIGHTS.bbLower);
-    pushSupportIfNear(out.bounce, donchian.support, 'donchianSupport', 'Donchian support', TRADE_LEVEL_WEIGHTS.donchianSupport);
-    pushSupportIfNear(out.bounce, reversal.supportZone, 'supportZone', 'Support zone', TRADE_LEVEL_WEIGHTS.supportZone);
-
-    pushBreakoutIfNear(out.breakout, nearest.resistance, 'nearestResistance', 'Nearest resistance', TRADE_LEVEL_WEIGHTS.nearestResistance);
-    pushBreakoutIfNear(out.breakout, donchian.resistance, 'donchianResistance', 'Donchian resistance', TRADE_LEVEL_WEIGHTS.donchianResistance);
-    pushBreakoutIfNear(out.breakout, fibLevels.fib236, 'fib236', 'Fib 23.6', TRADE_LEVEL_WEIGHTS.fib236);
-    pushBreakoutIfNear(out.breakout, pivot.r1, 'r1', 'Pivot R1', TRADE_LEVEL_WEIGHTS.r1);
-    pushBreakoutIfNear(out.breakout, pivot.r2, 'r2', 'Pivot R2', TRADE_LEVEL_WEIGHTS.r2);
-    pushBreakoutIfNear(out.breakout, values.bbUpper, 'bbUpper', 'Upper Bollinger band', TRADE_LEVEL_WEIGHTS.bbUpper);
-
-    return out;
-  }
-
-  function collectExitCandidates(indicators, timeframe, assetType) {
-    var snapshot = indicators || {};
-    var values = snapshot.values || {};
-    var sr = values.sr || {};
-    var pivot = sr.pivot || {};
-    var donchian = sr.donchian || {};
-    var nearest = sr.nearest || {};
-    var fib = values.fib || {};
-    var fibLevels = fib.levels || {};
-    var reversal = values.reversal || {};
-    var close = toNumber(snapshot.close);
-    var out = {
-      takeProfit: [],
-      defensive: []
-    };
-    function pushResistance(arr, value, key, reason, weight) {
-      var n = toNumber(value);
-      if (n == null || n <= 0) return;
-      if (close == null || n > close) pushCandidate(arr, n, key, reason, weight);
-    }
-    function pushSupport(arr, value, key, reason, weight) {
-      var n = toNumber(value);
-      if (n == null || n <= 0) return;
-      if (close == null || n < close) pushCandidate(arr, n, key, reason, weight);
-    }
-
-    pushResistance(out.takeProfit, nearest.resistance, 'nearestResistance', 'Nearest resistance', TRADE_LEVEL_WEIGHTS.nearestResistance);
-    pushResistance(out.takeProfit, donchian.resistance, 'donchianResistance', 'Donchian resistance', TRADE_LEVEL_WEIGHTS.donchianResistance);
-    pushResistance(out.takeProfit, fibLevels.fib236, 'fib236', 'Fib 23.6', TRADE_LEVEL_WEIGHTS.fib236);
-    pushResistance(out.takeProfit, pivot.r1, 'r1', 'Pivot R1', TRADE_LEVEL_WEIGHTS.r1);
-    pushResistance(out.takeProfit, pivot.r2, 'r2', 'Pivot R2', TRADE_LEVEL_WEIGHTS.r2);
-    pushResistance(out.takeProfit, values.bbUpper, 'bbUpper', 'Upper Bollinger band', TRADE_LEVEL_WEIGHTS.bbUpper);
-
-    pushSupport(out.defensive, values.ema50, 'ema50', 'EMA50 failure level', TRADE_LEVEL_WEIGHTS.ema50);
-    pushSupport(out.defensive, values.ema200, 'ema200', 'EMA200 structural level', TRADE_LEVEL_WEIGHTS.ema200);
-    pushSupport(out.defensive, nearest.support, 'nearestSupport', 'Nearest support', TRADE_LEVEL_WEIGHTS.nearestSupport);
-    pushSupport(out.defensive, donchian.midpoint, 'donchianMidpoint', 'Donchian midpoint', TRADE_LEVEL_WEIGHTS.donchianMidpoint);
-    pushSupport(out.defensive, donchian.support, 'donchianSupport', 'Donchian support', TRADE_LEVEL_WEIGHTS.donchianSupport);
-    pushSupport(out.defensive, fibLevels.fib618, 'fib618', 'Fib 61.8', TRADE_LEVEL_WEIGHTS.fib618);
-    pushSupport(out.defensive, fibLevels.fib786, 'fib786', 'Fib 78.6', TRADE_LEVEL_WEIGHTS.fib786);
-    pushSupport(out.defensive, pivot.s1, 's1', 'Pivot S1', TRADE_LEVEL_WEIGHTS.s1);
-    pushSupport(out.defensive, pivot.s2, 's2', 'Pivot S2', TRADE_LEVEL_WEIGHTS.s2);
-    pushSupport(out.defensive, reversal.supportZone, 'supportZone', 'Support zone', TRADE_LEVEL_WEIGHTS.supportZone);
-
-    return out;
-  }
-
-  function selectEntrySetup(indicators, timeframe, assetType, precomputedCandidates) {
+  function buildEntryCandidates(indicators, timeframe, assetType) {
     var snapshot = indicators || {};
     var values = snapshot.values || {};
     var statuses = snapshot.statuses || {};
     var trendMeter = snapshot.trendMeter || {};
-    var emaPosition = snapshot.emaPosition || values.emaPosition || {};
     var reversal = snapshot.reversal || {};
-    var reversalValues = values.reversal || {};
     var sr = values.sr || {};
+    var pivot = sr.pivot || {};
+    var donchian = sr.donchian || {};
+    var nearest = sr.nearest || {};
+    var fib = values.fib || {};
+    var fibLevels = fib.levels || {};
+    var reversalValues = values.reversal || {};
+    var close = toNumber(snapshot.close);
+    var atrPct = computeAtrPct(values, close);
+    var nearPct = zoneTolerancePctForAsset(assetType, atrPct) * 1.4;
+    var weights = getLevelWeightsForTimeframe(timeframe);
+    var trendScore = Number(trendMeter.timeframeScore || 0);
+    var trendLabel = String(trendMeter.label || snapshot.overall || 'Neutral');
+    var rsi14 = toNumber(values.rsi14);
+    var macdLine = toNumber(values.macdLine);
+    var macdSignal = toNumber(values.macdSignal);
+    var macdHistogram = toNumber(values.macdHistogram);
+    var macdBull = statuses.macd === 'Bullish' || (macdLine != null && macdSignal != null && macdLine >= macdSignal) || (macdHistogram != null && macdHistogram > 0);
+
+    function isNearSupport(level) {
+      var n = toNumber(level);
+      if (n == null || n <= 0) return false;
+      if (close == null || close <= 0) return true;
+      return n <= (close * (1 + (nearPct / 100)));
+    }
+
+    function isNearResistance(level) {
+      var n = toNumber(level);
+      if (n == null || n <= 0) return false;
+      if (close == null || close <= 0) return true;
+      return n >= (close * (1 - (nearPct / 100)));
+    }
+
+    var pullbackLevels = [];
+    if (isNearSupport(values.ema20)) pushCandidate(pullbackLevels, values.ema20, 'ema20', 'EMA20 pullback support', weights.ema20);
+    if (isNearSupport(values.ema50)) pushCandidate(pullbackLevels, values.ema50, 'ema50', 'EMA50 structural support', weights.ema50);
+    if (isNearSupport(pivot.p)) pushCandidate(pullbackLevels, pivot.p, 'pivotP', 'Pivot P', weights.pivotP);
+    if (isNearSupport(donchian.midpoint)) pushCandidate(pullbackLevels, donchian.midpoint, 'donchianMidpoint', 'Donchian midpoint', weights.donchianMidpoint);
+    if (isNearSupport(fibLevels.fib382)) pushCandidate(pullbackLevels, fibLevels.fib382, 'fib382', 'Fib 38.2 support', weights.fib382);
+    if (isNearSupport(fibLevels.fib500)) pushCandidate(pullbackLevels, fibLevels.fib500, 'fib500', 'Fib 50 support', weights.fib500);
+    if (isNearSupport(nearest.support)) pushCandidate(pullbackLevels, nearest.support, 'nearestSupport', 'Nearest support', weights.nearestSupport);
+
+    var bounceLevels = [];
+    if (isNearSupport(nearest.support)) pushCandidate(bounceLevels, nearest.support, 'nearestSupport', 'Nearest support', weights.nearestSupport);
+    if (isNearSupport(reversalValues.supportZone)) pushCandidate(bounceLevels, reversalValues.supportZone, 'supportZone', 'Support zone', weights.supportZone);
+    if (isNearSupport(fibLevels.fib618)) pushCandidate(bounceLevels, fibLevels.fib618, 'fib618', 'Fib 61.8 support', weights.fib618);
+    if (isNearSupport(fibLevels.fib786)) pushCandidate(bounceLevels, fibLevels.fib786, 'fib786', 'Fib 78.6 support', weights.fib786);
+    if (isNearSupport(values.bbLower)) pushCandidate(bounceLevels, values.bbLower, 'bbLower', 'Lower Bollinger band', weights.bbLower);
+    if (isNearSupport(donchian.support)) pushCandidate(bounceLevels, donchian.support, 'donchianSupport', 'Donchian support', weights.donchianSupport);
+    if (isNearSupport(pivot.s1)) pushCandidate(bounceLevels, pivot.s1, 's1', 'Pivot S1', weights.s1);
+    if (isNearSupport(pivot.s2)) pushCandidate(bounceLevels, pivot.s2, 's2', 'Pivot S2', weights.s2);
+
+    var breakoutLevels = [];
+    if (isNearResistance(nearest.resistance)) pushCandidate(breakoutLevels, nearest.resistance, 'nearestResistance', 'Nearest resistance', weights.nearestResistance);
+    if (isNearResistance(donchian.resistance)) pushCandidate(breakoutLevels, donchian.resistance, 'donchianResistance', 'Donchian resistance', weights.donchianResistance);
+    if (isNearResistance(fibLevels.fib236)) pushCandidate(breakoutLevels, fibLevels.fib236, 'fib236', 'Fib 23.6 resistance', weights.fib236);
+    if (isNearResistance(pivot.r1)) pushCandidate(breakoutLevels, pivot.r1, 'r1', 'Pivot R1', weights.r1);
+    if (isNearResistance(pivot.r2)) pushCandidate(breakoutLevels, pivot.r2, 'r2', 'Pivot R2', weights.r2);
+    if (isNearResistance(values.bbUpper)) pushCandidate(breakoutLevels, values.bbUpper, 'bbUpper', 'Upper Bollinger band', weights.bbUpper);
+
+    return [
+      {
+        family: 'pullback',
+        type: 'Pullback Entry',
+        zoneType: 'support',
+        levels: pullbackLevels,
+        eligible: (trendLabel === 'Bullish' || trendScore >= 3 || statuses.ema === 'Bullish') && pullbackLevels.length > 0,
+        reasons: ['Constructive trend with pullback support confluence']
+      },
+      {
+        family: 'bounce',
+        type: 'Bounce Entry',
+        zoneType: 'support',
+        levels: bounceLevels,
+        eligible: (Number(reversal.score || 0) >= 2 || (rsi14 != null && rsi14 <= 45) || (rsi14 != null && rsi14 <= 50 && macdBull)) && bounceLevels.length > 0,
+        reasons: ['Bounce setup near support/reversal zone']
+      },
+      {
+        family: 'breakout',
+        type: 'Breakout Entry',
+        zoneType: 'breakout',
+        levels: breakoutLevels,
+        eligible: (trendLabel === 'Bullish' || trendScore >= 4 || statuses.ema === 'Bullish') && macdBull && rsi14 != null && rsi14 >= 52 && breakoutLevels.length > 0,
+        reasons: ['Momentum breakout around overhead resistance']
+      }
+    ];
+  }
+
+  function collectEntryCandidates(indicators, timeframe, assetType) {
+    var families = buildEntryCandidates(indicators, timeframe, assetType);
+    var out = { trendPullback: [], bounce: [], breakout: [] };
+    families.forEach(function (entry) {
+      if (!entry || !Array.isArray(entry.levels)) return;
+      if (entry.family === 'pullback') out.trendPullback = entry.levels.slice();
+      else if (entry.family === 'bounce') out.bounce = entry.levels.slice();
+      else if (entry.family === 'breakout') out.breakout = entry.levels.slice();
+    });
+    return out;
+  }
+
+  function buildTakeProfitCandidates(indicators, timeframe, assetType, entryZone, setupType) {
+    var snapshot = indicators || {};
+    var values = snapshot.values || {};
+    var sr = values.sr || {};
+    var pivot = sr.pivot || {};
+    var donchian = sr.donchian || {};
     var nearest = sr.nearest || {};
     var fib = values.fib || {};
     var fibLevels = fib.levels || {};
     var close = toNumber(snapshot.close);
-    var ema20 = toNumber(values.ema20);
-    var rsi14 = toNumber(values.rsi14);
-    var adx14 = toNumber(values.adx14);
-    var trendLabel = String(trendMeter.label || snapshot.overall || 'Neutral');
-    var candidates = precomputedCandidates || collectEntryCandidates(snapshot, timeframe, assetType);
-    var setup = null;
+    var weights = getLevelWeightsForTimeframe(timeframe);
+    var setup = String(setupType || '').toLowerCase();
+    var ref = midpoint(entryZone && entryZone.zoneLow, entryZone && entryZone.zoneHigh);
+    if (ref == null) ref = close;
+    var out = [];
 
-    var extensionLimit = normalizeAssetType(assetType) === 'crypto' ? 0.05 : 0.035;
-    var fib382 = toNumber(fibLevels.fib382);
-    var pullbackStyle = String(emaPosition.label || '').toLowerCase() === 'pullback' || String(emaPosition.label || '').toLowerCase() === 'trend test';
-    var pullbackByPrice = close != null && ema20 != null && close <= (ema20 * 1.012);
-    var pullbackByFib = close != null && fib382 != null && close <= (fib382 * 1.012);
-    var notExtended = close != null && ema20 != null ? close <= (ema20 * (1 + extensionLimit)) : false;
-    if (trendLabel === 'Bullish' && statuses.ema === 'Bullish' && notExtended && (pullbackStyle || pullbackByPrice || pullbackByFib)) {
-      var trendPullbackZone = buildConfluenceZone(candidates.trendPullback, assetType, 'support', { referencePrice: close });
-      if (trendPullbackZone) {
-        setup = {
-          type: 'Trend Pullback Entry',
-          zone: trendPullbackZone,
-          reasons: uniqueStrings((trendPullbackZone.reasons || []).concat(['Trend and EMA structure aligned']))
-        };
-      }
+    function pushResistance(value, key, reason, weight) {
+      var n = toNumber(value);
+      if (n == null || n <= 0) return;
+      if (ref == null || n > ref) pushCandidate(out, n, key, reason, weight);
     }
 
-    if (!setup) {
-      var reversalScore = Number(reversal.score || 0);
-      var nearSupport = !!reversalValues.nearSupport;
-      if (!nearSupport && nearest && nearest.supportDistancePct != null) {
-        nearSupport = Math.abs(Number(nearest.supportDistancePct)) <= 1.8;
-      }
-      var rsiWeak = rsi14 != null && rsi14 <= 45;
-      var macdImproving = !!reversalValues.macdHistogramRising;
-      if (reversalScore >= 2 && nearSupport && (rsiWeak || macdImproving)) {
-        var bounceZone = buildConfluenceZone(candidates.bounce, assetType, 'support', { referencePrice: close });
-        if (bounceZone) {
-          setup = {
-            type: 'Bounce Entry',
-            zone: bounceZone,
-            reasons: uniqueStrings((bounceZone.reasons || []).concat(['Reversal signal near support']))
-          };
-        }
-      }
+    var breakoutBoost = setup.indexOf('breakout') !== -1 ? 1.25 : 1;
+    var bounceBias = setup.indexOf('bounce') !== -1 ? 1.15 : 1;
+    pushResistance(nearest.resistance, 'nearestResistance', 'Nearest resistance', weights.nearestResistance * breakoutBoost * bounceBias);
+    pushResistance(donchian.resistance, 'donchianResistance', 'Donchian resistance', weights.donchianResistance * breakoutBoost);
+    pushResistance(pivot.r1, 'r1', 'Pivot R1', weights.r1 * bounceBias);
+    pushResistance(pivot.r2, 'r2', 'Pivot R2', weights.r2 * breakoutBoost);
+    pushResistance(values.bbUpper, 'bbUpper', 'Upper Bollinger band', weights.bbUpper);
+    pushResistance(fibLevels.fib236, 'fib236', 'Fib 23.6 resistance', weights.fib236);
+    pushResistance(fib.swingHigh, 'swingHigh', 'Recent swing high', Math.max(2, weights.nearestResistance || 2));
+    return out;
+  }
+
+  function collectTakeProfitCandidates(indicators, timeframe, assetType, setupType) {
+    return buildTakeProfitCandidates(indicators, timeframe, assetType, null, setupType);
+  }
+
+  function buildFailureExitCandidates(indicators, timeframe, assetType, entryZone, setupType) {
+    var snapshot = indicators || {};
+    var values = snapshot.values || {};
+    var sr = values.sr || {};
+    var pivot = sr.pivot || {};
+    var donchian = sr.donchian || {};
+    var nearest = sr.nearest || {};
+    var fib = values.fib || {};
+    var fibLevels = fib.levels || {};
+    var reversalValues = values.reversal || {};
+    var close = toNumber(snapshot.close);
+    var weights = getLevelWeightsForTimeframe(timeframe);
+    var setup = String(setupType || '').toLowerCase();
+    var ref = midpoint(entryZone && entryZone.zoneLow, entryZone && entryZone.zoneHigh);
+    if (ref == null) ref = close;
+    var out = [];
+
+    function pushSupport(value, key, reason, weight) {
+      var n = toNumber(value);
+      if (n == null || n <= 0) return;
+      if (ref == null || n < ref) pushCandidate(out, n, key, reason, weight);
     }
 
-    if (!setup) {
-      var nearResistance = false;
-      if (nearest && nearest.resistanceDistancePct != null) {
-        nearResistance = Math.abs(Number(nearest.resistanceDistancePct)) <= 1.8;
-      }
-      var donchianResistance = values && values.sr && values.sr.donchian ? toNumber(values.sr.donchian.resistance) : null;
-      if (!nearResistance && close != null && donchianResistance != null && donchianResistance > 0) {
-        nearResistance = close >= (donchianResistance * 0.995);
-      }
-      var adxStrong = adx14 != null && adx14 > 25;
-      var volumeBull = values.volumeConfirmation && values.volumeConfirmation.status === 'Bullish confirmation';
-      var momentumStrong = adxStrong || volumeBull || Number(trendMeter.timeframeScore || 0) >= 4;
-      if (trendLabel === 'Bullish' && statuses.macd === 'Bullish' && rsi14 != null && rsi14 > 60 && nearResistance && momentumStrong) {
-        var breakoutZone = buildConfluenceZone(candidates.breakout, assetType, 'breakout', { referencePrice: close });
-        if (breakoutZone) {
-          setup = {
-            type: 'Breakout Entry',
-            zone: breakoutZone,
-            reasons: uniqueStrings((breakoutZone.reasons || []).concat(['Momentum breakout setup']))
-          };
-        }
-      }
-    }
+    var bounceBias = setup.indexOf('bounce') !== -1 ? 1.2 : 1;
+    pushSupport(values.ema50, 'ema50', 'EMA50 structural support', weights.ema50);
+    pushSupport(values.ema200, 'ema200', 'EMA200 structural support', weights.ema200);
+    pushSupport(nearest.support, 'nearestSupport', 'Nearest support', weights.nearestSupport * bounceBias);
+    pushSupport(reversalValues.supportZone, 'supportZone', 'Support zone', weights.supportZone * bounceBias);
+    pushSupport(donchian.midpoint, 'donchianMidpoint', 'Donchian midpoint', weights.donchianMidpoint);
+    pushSupport(donchian.support, 'donchianSupport', 'Donchian support', weights.donchianSupport);
+    pushSupport(fibLevels.fib618, 'fib618', 'Fib 61.8 support', weights.fib618 * bounceBias);
+    pushSupport(fibLevels.fib786, 'fib786', 'Fib 78.6 support', weights.fib786 * bounceBias);
+    pushSupport(pivot.s1, 's1', 'Pivot S1', weights.s1);
+    pushSupport(pivot.s2, 's2', 'Pivot S2', weights.s2);
+    return out;
+  }
 
-    return setup;
+  function collectFailureExitCandidates(indicators, timeframe, assetType, setupType) {
+    return buildFailureExitCandidates(indicators, timeframe, assetType, null, setupType);
+  }
+
+  function collectExitCandidates(indicators, timeframe, assetType, setupType) {
+    return {
+      takeProfit: collectTakeProfitCandidates(indicators, timeframe, assetType, setupType),
+      defensive: collectFailureExitCandidates(indicators, timeframe, assetType, setupType)
+    };
   }
 
   function isValidTakeProfitZone(zone, currentClose) {
@@ -1325,97 +1536,361 @@
     return low < close && high < close;
   }
 
-  function selectTakeProfitSetup(indicators, timeframe, assetType, precomputedCandidates) {
-    var snapshot = indicators || {};
-    var close = toNumber(snapshot.close);
-    var candidates = precomputedCandidates || collectExitCandidates(snapshot, timeframe, assetType);
-    var takeProfitZone = buildConfluenceZone(candidates.takeProfit, assetType, 'resistance', { referencePrice: close });
-    if (takeProfitZone && isValidTakeProfitZone(takeProfitZone, close)) {
-      return {
-        type: 'Take Profit Zone',
-        zone: takeProfitZone,
-        reasons: uniqueStrings((takeProfitZone.reasons || []).concat(['Overhead resistance cluster']))
-      };
-    }
-    return null;
+  function midpoint(low, high) {
+    var lo = toNumber(low);
+    var hi = toNumber(high);
+    if (lo == null || hi == null) return null;
+    return (lo + hi) / 2;
   }
 
-  function selectFailureExitSetup(indicators, timeframe, assetType, precomputedCandidates) {
-    var snapshot = indicators || {};
-    var close = toNumber(snapshot.close);
-    var candidates = precomputedCandidates || collectExitCandidates(snapshot, timeframe, assetType);
-    var failureZone = buildConfluenceZone(candidates.defensive, assetType, 'support', { referencePrice: close });
-    if (failureZone && isValidFailureZone(failureZone, close)) {
-      return {
-        type: 'Trend Failure Exit',
-        zone: failureZone,
-        reasons: uniqueStrings((failureZone.reasons || []).concat(['Downside structure failure level']))
-      };
-    }
-    return null;
+  function computeRewardRisk(entryZone, takeProfitZone, failureExitZone) {
+    var entryMid = midpoint(entryZone && entryZone.zoneLow, entryZone && entryZone.zoneHigh);
+    var takeProfitMid = midpoint(takeProfitZone && takeProfitZone.zoneLow, takeProfitZone && takeProfitZone.zoneHigh);
+    var failureExitMid = midpoint(failureExitZone && failureExitZone.zoneLow, failureExitZone && failureExitZone.zoneHigh);
+    var rewardPct = null;
+    var riskPct = null;
+    var rr = null;
+    if (entryMid != null && takeProfitMid != null && entryMid > 0) rewardPct = ((takeProfitMid - entryMid) / entryMid) * 100;
+    if (entryMid != null && failureExitMid != null && entryMid > 0) riskPct = ((entryMid - failureExitMid) / entryMid) * 100;
+    if (rewardPct != null && riskPct != null && riskPct > 0) rr = rewardPct / riskPct;
+    return {
+      entryMid: entryMid,
+      takeProfitMid: takeProfitMid,
+      failureExitMid: failureExitMid,
+      rewardPct: rewardPct,
+      riskPct: riskPct,
+      rr: rr
+    };
   }
 
-  function selectExitSetup(indicators, timeframe, assetType, precomputedCandidates) {
-    return selectTakeProfitSetup(indicators, timeframe, assetType, precomputedCandidates) ||
-      selectFailureExitSetup(indicators, timeframe, assetType, precomputedCandidates);
+  function validateTradePlan(setup, assetType, timeframe) {
+    var candidate = setup || {};
+    var thresholds = tradeThresholds(assetType, timeframe);
+    var entryZone = candidate.entryZone || null;
+    var takeProfitZone = candidate.takeProfitZone || null;
+    var failureExitZone = candidate.failureExitZone || null;
+    if (!entryZone || !isFinite(entryZone.zoneLow) || !isFinite(entryZone.zoneHigh)) {
+      return { valid: false, reason: 'No setup: missing entry zone' };
+    }
+    if (!takeProfitZone || !failureExitZone) {
+      return { valid: false, reason: 'No setup: missing take-profit or failure exit zone' };
+    }
+    var metrics = computeRewardRisk(entryZone, takeProfitZone, failureExitZone);
+    if (metrics.entryMid == null || metrics.takeProfitMid == null || metrics.failureExitMid == null || metrics.entryMid <= 0) {
+      return { valid: false, reason: 'No setup: invalid zone data', metrics: metrics };
+    }
+    if (!(metrics.takeProfitMid > metrics.entryMid)) {
+      return { valid: false, reason: 'No setup: invalid zone ordering', metrics: metrics };
+    }
+    if (!(metrics.failureExitMid < metrics.entryMid)) {
+      return { valid: false, reason: 'No setup: invalid zone ordering', metrics: metrics };
+    }
+    if (metrics.rewardPct == null || metrics.rewardPct < thresholds.minTakeProfitDistancePct) {
+      return { valid: false, reason: 'No setup: take-profit too close to entry', metrics: metrics };
+    }
+    if (metrics.rewardPct == null || metrics.rewardPct < thresholds.minRewardPct) {
+      return { valid: false, reason: 'No setup: upside too small', metrics: metrics };
+    }
+    if (metrics.rr == null || metrics.rr < thresholds.minRR) {
+      return { valid: false, reason: 'No setup: reward/risk too weak', metrics: metrics };
+    }
+    return { valid: true, reason: '', metrics: metrics, thresholds: thresholds };
   }
 
   function mapTradeConfidenceLabel(points) {
     var p = Number(points) || 0;
-    if (p >= 5) return 'High';
-    if (p >= 3) return 'Medium';
-    return 'Low';
+    if (p >= 7) return 'Strong';
+    if (p >= 4) return 'Moderate';
+    return 'Caution';
   }
 
-  function computeTradePlanConfidence(indicators, entrySetup, takeProfitSetup, failureExitSetup) {
+  function scoreTradeSetup(candidate, indicators, timeframe, assetType) {
+    var c = candidate || {};
     var snapshot = indicators || {};
     var values = snapshot.values || {};
     var statuses = snapshot.statuses || {};
     var trendMeter = snapshot.trendMeter || {};
+    var reversal = snapshot.reversal || {};
     var trendLabel = String(trendMeter.label || snapshot.overall || 'Neutral');
+    var trendScore = Number(trendMeter.timeframeScore || 0);
     var rsi14 = toNumber(values.rsi14);
     var adx14 = toNumber(values.adx14);
     var volumeStatus = values.volumeConfirmation && values.volumeConfirmation.status;
-    var reversal = snapshot.reversal || {};
-    var points = 0;
+    var score = 0;
+    var confluenceCount = Number(c.entryZone && c.entryZone.confluenceCount || 0);
+    if (confluenceCount >= 3) score += 2;
+    else if (confluenceCount >= 2) score += 1;
 
-    var setup = entrySetup || null;
-    if (setup && setup.zone && Number(setup.zone.confluenceCount || 0) >= 2) points += 1;
-    if (!setup && takeProfitSetup && takeProfitSetup.zone && Number(takeProfitSetup.zone.confluenceCount || 0) >= 2) points += 1;
-    if (!setup && failureExitSetup && failureExitSetup.zone && Number(failureExitSetup.zone.confluenceCount || 0) >= 2) points += 1;
+    if ((c.type === 'Pullback Entry' || c.type === 'Breakout Entry') && trendLabel === 'Bullish') score += 2;
+    else if (trendLabel === 'Neutral' && trendScore >= 1) score += 1;
+    else if (trendLabel === 'Bearish' && adx14 != null && adx14 >= 25) score -= 1;
 
-    if (setup && setup.type === 'Trend Pullback Entry' && trendLabel === 'Bullish') points += 1;
-    if (setup && setup.type === 'Breakout Entry' && trendLabel === 'Bullish') points += 1;
-    if (setup && setup.type === 'Bounce Entry' && (trendLabel === 'Bullish' || trendLabel === 'Neutral')) points += 1;
-    if (!setup && failureExitSetup && failureExitSetup.type === 'Trend Failure Exit' && trendLabel === 'Bearish') points += 1;
+    if (statuses.macd === 'Bullish') score += 1;
+    if (c.type === 'Bounce Entry') {
+      if (rsi14 != null && rsi14 <= 55) score += 1;
+    } else if (c.type === 'Breakout Entry') {
+      if (rsi14 != null && rsi14 >= 50) score += 1;
+    } else if (rsi14 != null && rsi14 >= 45 && rsi14 <= 70) {
+      score += 1;
+    }
+    if (adx14 != null && adx14 >= 18) score += 1;
+    if (volumeStatus === 'Bullish confirmation') score += 1;
 
-    if (setup) {
-      if (setup.type === 'Bounce Entry') {
-        if (statuses.macd === 'Bullish' || (values.reversal && values.reversal.macdHistogramRising)) points += 1;
-      } else if (statuses.macd === 'Bullish') {
-        points += 1;
-      }
+    if (Number(reversal.score || 0) >= 2) score += 1;
+    if (c.type === 'Bounce Entry' && Number(reversal.score || 0) >= 3) score += 2;
+
+    var rr = c.rewardRisk || {};
+    if (rr.rr != null && rr.rr >= 2.5) score += 2;
+    else if (rr.rr != null && rr.rr >= 2.0) score += 1;
+
+    if (trendLabel === 'Bearish' && adx14 != null && adx14 >= 25) score -= 2;
+    if (rr.entryMid != null && rr.takeProfitMid != null && ((rr.takeProfitMid - rr.entryMid) / rr.entryMid) < 0.06) score -= 2;
+    if (c.validation && !c.validation.valid && c.validation.reason) score -= 2;
+    return score;
+  }
+
+  function scoreTrendPullbackSetup(indicators, payload, timeframe, assetType) {
+    return scoreTradeSetup({
+      type: 'Pullback Entry',
+      entryZone: payload && payload.entrySetup ? payload.entrySetup.zone : null,
+      rewardRisk: payload ? payload.rewardRisk : null,
+      validation: payload ? payload.validation : null
+    }, indicators, timeframe, assetType);
+  }
+
+  function scoreBounceSetup(indicators, payload, timeframe, assetType) {
+    return scoreTradeSetup({
+      type: 'Bounce Entry',
+      entryZone: payload && payload.entrySetup ? payload.entrySetup.zone : null,
+      rewardRisk: payload ? payload.rewardRisk : null,
+      validation: payload ? payload.validation : null
+    }, indicators, timeframe, assetType);
+  }
+
+  function scoreBreakoutSetup(indicators, payload, timeframe, assetType) {
+    return scoreTradeSetup({
+      type: 'Breakout Entry',
+      entryZone: payload && payload.entrySetup ? payload.entrySetup.zone : null,
+      rewardRisk: payload ? payload.rewardRisk : null,
+      validation: payload ? payload.validation : null
+    }, indicators, timeframe, assetType);
+  }
+
+  function evaluateEntryCandidate(indicators, timeframe, assetType, candidate, atrPct) {
+    var snapshot = indicators || {};
+    var close = toNumber(snapshot.close);
+    var mode = normalizeAssetType(assetType);
+    var timeKey = normalizeTimeframeKey(timeframe);
+    var setup = candidate || {};
+    if (!Array.isArray(setup.levels) || !setup.levels.length) {
+      return {
+        type: setup.type || 'No setup',
+        entrySetup: null,
+        takeProfitSetup: null,
+        failureExitSetup: null,
+        rewardRisk: {},
+        setupScore: -2,
+        confidence: { points: -2, label: 'Caution' },
+        validation: { valid: false, reason: 'No setup: missing entry zone' }
+      };
     }
 
-    if (setup) {
-      if (setup.type === 'Bounce Entry') {
-        if (rsi14 != null && rsi14 < 45) points += 1;
-      } else if (rsi14 != null && rsi14 > 55) {
-        points += 1;
-      }
-    }
-
-    if (setup) {
-      if ((adx14 != null && adx14 > 25) || volumeStatus === 'Bullish confirmation') points += 1;
-    } else if ((takeProfitSetup || failureExitSetup) && ((adx14 != null && adx14 > 25) || volumeStatus === 'Bearish confirmation')) {
-      points += 1;
-    }
-
-    if (setup && setup.type === 'Bounce Entry' && Number(reversal.score || 0) >= 2) points += 1;
-
+    var entryZone = buildConfluenceZone(setup.levels, mode, setup.zoneType || 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var entrySetup = entryZone ? {
+      type: setup.type,
+      zone: entryZone,
+      reasons: uniqueStrings((setup.reasons || []).concat(entryZone.reasons || []))
+    } : null;
+    var entryMid = midpoint(entryZone && entryZone.zoneLow, entryZone && entryZone.zoneHigh);
+    var takeProfitLevels = buildTakeProfitCandidates(snapshot, timeKey, mode, entryZone, setup.type);
+    var failureLevels = buildFailureExitCandidates(snapshot, timeKey, mode, entryZone, setup.type);
+    var takeProfitZone = buildConfluenceZone(takeProfitLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var failureExitZone = buildConfluenceZone(failureLevels, mode, 'support', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var takeProfitSetup = takeProfitZone ? {
+      type: 'Take Profit Zone',
+      zone: takeProfitZone,
+      reasons: uniqueStrings((takeProfitZone.reasons || []).concat(['Overhead resistance cluster']))
+    } : null;
+    var failureExitSetup = failureExitZone ? {
+      type: 'Failure Exit Zone',
+      zone: failureExitZone,
+      reasons: uniqueStrings((failureExitZone.reasons || []).concat(['Downside invalidation zone']))
+    } : null;
+    var rewardRisk = computeRewardRisk(entryZone, takeProfitZone, failureExitZone);
+    var validation = validateTradePlan({ entryZone: entryZone, takeProfitZone: takeProfitZone, failureExitZone: failureExitZone }, mode, timeKey);
+    var setupScore = scoreTradeSetup({
+      type: setup.type,
+      entryZone: entryZone,
+      takeProfitZone: takeProfitZone,
+      failureExitZone: failureExitZone,
+      rewardRisk: rewardRisk,
+      validation: validation
+    }, snapshot, timeKey, mode);
+    if (!setup.eligible) setupScore -= 3;
     return {
-      points: points,
-      label: mapTradeConfidenceLabel(points)
+      type: setup.type,
+      entrySetup: entrySetup,
+      takeProfitSetup: takeProfitSetup,
+      failureExitSetup: failureExitSetup,
+      rewardRisk: rewardRisk,
+      setupScore: setupScore,
+      confidence: { points: setupScore, label: mapTradeConfidenceLabel(setupScore) },
+      validation: validation,
+      candidate: setup
+    };
+  }
+
+  function selectBestTradePlan(candidates) {
+    var validSetups = (Array.isArray(candidates) ? candidates : []).filter(function (entry) {
+      return !!(entry && entry.validation && entry.validation.valid);
+    });
+    if (!validSetups.length) return null;
+    validSetups.sort(function (a, b) {
+      if (b.setupScore !== a.setupScore) return b.setupScore - a.setupScore;
+      var bConfidence = b.confidence ? Number(b.confidence.points || 0) : 0;
+      var aConfidence = a.confidence ? Number(a.confidence.points || 0) : 0;
+      if (bConfidence !== aConfidence) return bConfidence - aConfidence;
+      var bRr = b.rewardRisk ? Number(b.rewardRisk.rr || 0) : 0;
+      var aRr = a.rewardRisk ? Number(a.rewardRisk.rr || 0) : 0;
+      return bRr - aRr;
+    });
+    return validSetups[0];
+  }
+
+  function selectBestTradeSetup(candidates) {
+    return selectBestTradePlan(candidates);
+  }
+
+  function evaluateTrendPullbackSetup(indicators, timeframe, assetType) {
+    var candidates = buildEntryCandidates(indicators, timeframe, assetType);
+    var pick = candidates.filter(function (x) { return x.family === 'pullback'; })[0] || null;
+    if (!pick) return null;
+    var snapshot = indicators || {};
+    var atrPct = computeAtrPct(snapshot.values || {}, toNumber(snapshot.close));
+    return evaluateEntryCandidate(indicators, timeframe, assetType, pick, atrPct);
+  }
+
+  function evaluateBounceSetup(indicators, timeframe, assetType) {
+    var candidates = buildEntryCandidates(indicators, timeframe, assetType);
+    var pick = candidates.filter(function (x) { return x.family === 'bounce'; })[0] || null;
+    if (!pick) return null;
+    var snapshot = indicators || {};
+    var atrPct = computeAtrPct(snapshot.values || {}, toNumber(snapshot.close));
+    return evaluateEntryCandidate(indicators, timeframe, assetType, pick, atrPct);
+  }
+
+  function evaluateBreakoutSetup(indicators, timeframe, assetType) {
+    var candidates = buildEntryCandidates(indicators, timeframe, assetType);
+    var pick = candidates.filter(function (x) { return x.family === 'breakout'; })[0] || null;
+    if (!pick) return null;
+    var snapshot = indicators || {};
+    var atrPct = computeAtrPct(snapshot.values || {}, toNumber(snapshot.close));
+    return evaluateEntryCandidate(indicators, timeframe, assetType, pick, atrPct);
+  }
+
+  function selectEntrySetup(indicators, timeframe, assetType) {
+    var snapshot = indicators || {};
+    var values = snapshot.values || {};
+    var close = toNumber(snapshot.close);
+    var mode = normalizeAssetType(assetType);
+    var timeKey = normalizeTimeframeKey(timeframe || snapshot.timeKey || '1d');
+    var atrPct = computeAtrPct(values, close);
+    var candidates = buildEntryCandidates(snapshot, timeKey, mode).map(function (entry) {
+      return evaluateEntryCandidate(snapshot, timeKey, mode, entry, atrPct);
+    });
+    var best = selectBestTradePlan(candidates);
+    return best ? best.entrySetup : null;
+  }
+
+  function selectTakeProfitSetup(indicators, timeframe, assetType, precomputedCandidates, setupType) {
+    var snapshot = indicators || {};
+    var values = snapshot.values || {};
+    var close = toNumber(snapshot.close);
+    var timeKey = normalizeTimeframeKey(timeframe || snapshot.timeKey || '1d');
+    var mode = normalizeAssetType(assetType);
+    var atrPct = computeAtrPct(values, close);
+    var levels = Array.isArray(precomputedCandidates) ? precomputedCandidates : buildTakeProfitCandidates(snapshot, timeKey, mode, null, setupType);
+    var takeProfitZone = buildConfluenceZone(levels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    if (takeProfitZone && isValidTakeProfitZone(takeProfitZone, close)) {
+      return { type: 'Take Profit Zone', zone: takeProfitZone, reasons: uniqueStrings((takeProfitZone.reasons || []).concat(['Overhead resistance cluster'])) };
+    }
+    return null;
+  }
+
+  function selectFailureExitSetup(indicators, timeframe, assetType, precomputedCandidates, setupType) {
+    var snapshot = indicators || {};
+    var values = snapshot.values || {};
+    var close = toNumber(snapshot.close);
+    var timeKey = normalizeTimeframeKey(timeframe || snapshot.timeKey || '1d');
+    var mode = normalizeAssetType(assetType);
+    var atrPct = computeAtrPct(values, close);
+    var levels = Array.isArray(precomputedCandidates) ? precomputedCandidates : buildFailureExitCandidates(snapshot, timeKey, mode, null, setupType);
+    var failureZone = buildConfluenceZone(levels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    if (failureZone && isValidFailureZone(failureZone, close)) {
+      return { type: 'Failure Exit Zone', zone: failureZone, reasons: uniqueStrings((failureZone.reasons || []).concat(['Downside invalidation zone'])) };
+    }
+    return null;
+  }
+
+  function selectExitSetup(indicators, timeframe, assetType, precomputedCandidates, setupType) {
+    return selectTakeProfitSetup(indicators, timeframe, assetType, precomputedCandidates, setupType) ||
+      selectFailureExitSetup(indicators, timeframe, assetType, precomputedCandidates, setupType);
+  }
+
+  function formatTradeDebugNumber(value, digits) {
+    var n = Number(value);
+    if (!isFinite(n)) return 'n/a';
+    var d = Number.isFinite(Number(digits)) ? Math.max(0, Number(digits)) : 2;
+    return n.toFixed(d);
+  }
+
+  function buildTradePlanDebugDump(timeframe, chosenSetup, candidateSetups, rejectionReason) {
+    var lines = [];
+    lines.push('timeframe=' + String(timeframe || '1d').toUpperCase());
+    lines.push('chosen=' + String(chosenSetup || 'none'));
+    if (rejectionReason) lines.push('rejection=' + String(rejectionReason));
+    (Array.isArray(candidateSetups) ? candidateSetups : []).forEach(function (item) {
+      var row = item || {};
+      lines.push(
+        String(row.type || 'unknown') +
+        ' score=' + formatTradeDebugNumber(row.setupScore, 1) +
+        ' entryMid=' + formatTradeDebugNumber(row.entryMid, 4) +
+        ' tpMid=' + formatTradeDebugNumber(row.takeProfitMid, 4) +
+        ' failMid=' + formatTradeDebugNumber(row.failureExitMid, 4) +
+        ' reward=' + formatTradeDebugNumber(row.rewardPct, 2) + '%' +
+        ' risk=' + formatTradeDebugNumber(row.riskPct, 2) + '%' +
+        ' rr=' + formatTradeDebugNumber(row.rr, 2) +
+        ' valid=' + String(!(row.validation && row.validation.valid === false)) +
+        (row.validationReason ? (' reason=' + String(row.validationReason)) : '')
+      );
+    });
+    return lines.join(' | ');
+  }
+
+  function computeHolderExitPlan(indicators, timeframe, assetType, atrPct, entrySetup) {
+    var snapshot = indicators || {};
+    var close = toNumber(snapshot.close);
+    var mode = normalizeAssetType(assetType);
+    var timeKey = normalizeTimeframeKey(timeframe || snapshot.timeKey || '1d');
+    var entryZone = entrySetup && entrySetup.zone ? entrySetup.zone : null;
+    var takeProfitLevels = buildTakeProfitCandidates(snapshot, timeKey, mode, entryZone, entrySetup ? entrySetup.type : '');
+    var failureLevels = buildFailureExitCandidates(snapshot, timeKey, mode, entryZone, entrySetup ? entrySetup.type : '');
+    var takeProfitZone = buildConfluenceZone(takeProfitLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var failureZone = buildConfluenceZone(failureLevels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    if (takeProfitZone && !isValidTakeProfitZone(takeProfitZone, close)) takeProfitZone = null;
+    if (failureZone && !isValidFailureZone(failureZone, close)) failureZone = null;
+    return {
+      available: !!(takeProfitZone || failureZone),
+      takeProfitSetup: takeProfitZone ? {
+        type: 'Take Profit / Trim Zone',
+        zone: takeProfitZone,
+        reasons: uniqueStrings((takeProfitZone.reasons || []).concat(['Holder trim zone from overhead resistance']))
+      } : null,
+      failureExitSetup: failureZone ? {
+        type: 'Failure Exit Zone',
+        zone: failureZone,
+        reasons: uniqueStrings((failureZone.reasons || []).concat(['Holder invalidation zone']))
+      } : null
     };
   }
 
@@ -1424,9 +1899,12 @@
     var values = snapshot.values || {};
     var close = toNumber(snapshot.close);
     var mode = normalizeAssetType(assetType);
-    var timeKey = String(timeframe || snapshot.timeKey || '1d').toLowerCase();
+    var timeKey = normalizeTimeframeKey(timeframe || snapshot.timeKey || '1d');
     var fib = values.fib || {};
     var sr = values.sr || {};
+    var atrPct = computeAtrPct(values, close);
+    if (atrPct == null) atrPct = mode === 'crypto' ? 3.0 : 1.5;
+
     var hasCoreData = close != null && (
       toNumber(values.ema20) != null ||
       toNumber(values.ema50) != null ||
@@ -1444,30 +1922,94 @@
         takeProfitType: 'No clear take-profit zone',
         failureExitType: 'No clear failure exit',
         exitType: 'No setup',
-        confidence: 'Low',
+        confidence: 'Caution',
         confidencePoints: 0,
+        rewardPct: null,
+        riskPct: null,
+        rr: null,
         reasons: [],
         note: 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.',
         reason: 'Not enough data'
       };
     }
 
-    var entryCandidates = collectEntryCandidates(snapshot, timeKey, mode);
-    var exitCandidates = collectExitCandidates(snapshot, timeKey, mode);
-    var entrySetup = selectEntrySetup(snapshot, timeKey, mode, entryCandidates);
-    var takeProfitSetup = selectTakeProfitSetup(snapshot, timeKey, mode, exitCandidates);
-    var failureExitSetup = selectFailureExitSetup(snapshot, timeKey, mode, exitCandidates);
-    var confidence = computeTradePlanConfidence(snapshot, entrySetup, takeProfitSetup, failureExitSetup);
+    var entryFamilies = buildEntryCandidates(snapshot, timeKey, mode);
+    var evaluatedCandidates = entryFamilies.map(function (entry) {
+      return evaluateEntryCandidate(snapshot, timeKey, mode, entry, atrPct);
+    });
+    var candidateDebug = evaluatedCandidates.map(function (item) {
+      return {
+        type: item.type,
+        eligible: !!(item.candidate && item.candidate.eligible),
+        setupScore: item.setupScore,
+        confidencePoints: item.confidence ? item.confidence.points : 0,
+        entryMid: item.rewardRisk ? item.rewardRisk.entryMid : null,
+        takeProfitMid: item.rewardRisk ? item.rewardRisk.takeProfitMid : null,
+        failureExitMid: item.rewardRisk ? item.rewardRisk.failureExitMid : null,
+        rewardPct: item.rewardRisk ? item.rewardRisk.rewardPct : null,
+        riskPct: item.rewardRisk ? item.rewardRisk.riskPct : null,
+        rr: item.rewardRisk ? item.rewardRisk.rr : null,
+        validation: item.validation || null,
+        validationReason: item.validation && item.validation.reason ? item.validation.reason : ''
+      };
+    });
+
+    var bestEntry = selectBestTradePlan(evaluatedCandidates);
+    var holderPlan = computeHolderExitPlan(snapshot, timeKey, mode, atrPct, bestEntry ? bestEntry.entrySetup : null);
+
+    var rejection = 'No setup: no clean confluence setup';
+    for (var i = 0; i < evaluatedCandidates.length; i++) {
+      if (evaluatedCandidates[i] && evaluatedCandidates[i].validation && evaluatedCandidates[i].validation.reason) {
+        rejection = evaluatedCandidates[i].validation.reason;
+        break;
+      }
+    }
+
+    if (!bestEntry && !holderPlan.available) {
+      return {
+        available: false,
+        timeframe: timeKey,
+        assetType: mode,
+        entryType: 'No setup',
+        takeProfitType: 'No clear take-profit zone',
+        failureExitType: 'No clear failure exit',
+        exitType: 'No setup',
+        confidence: 'Caution',
+        confidencePoints: 0,
+        rewardPct: null,
+        riskPct: null,
+        rr: null,
+        reasons: [],
+        note: 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.',
+        reason: rejection,
+        debug: {
+          timeframe: timeKey,
+          atrPct: atrPct,
+          candidateEntryClusters: entryFamilies,
+          candidateSetups: candidateDebug,
+          chosenSetup: null,
+          rejectionReason: rejection,
+          dump: buildTradePlanDebugDump(timeKey, null, candidateDebug, rejection)
+        }
+      };
+    }
+
+    var entrySetup = bestEntry ? bestEntry.entrySetup : null;
+    var takeProfitSetup = bestEntry ? bestEntry.takeProfitSetup : holderPlan.takeProfitSetup;
+    var failureExitSetup = bestEntry ? bestEntry.failureExitSetup : holderPlan.failureExitSetup;
+    var rewardRisk = bestEntry ? bestEntry.rewardRisk : {};
+    var primaryExitSetup = takeProfitSetup || failureExitSetup || null;
+    var confidenceLabel = bestEntry ? mapTradeConfidenceLabel(bestEntry.setupScore) : 'Caution';
+    var confidencePoints = bestEntry ? Number(bestEntry.setupScore || 0) : 1;
     var combinedReasons = uniqueStrings(
       (entrySetup && entrySetup.reasons ? entrySetup.reasons : [])
         .concat(takeProfitSetup && takeProfitSetup.reasons ? takeProfitSetup.reasons : [])
         .concat(failureExitSetup && failureExitSetup.reasons ? failureExitSetup.reasons : [])
+        .concat(bestEntry ? [] : ['No fresh entry setup passed 5% reward and minimum RR'])
     );
-    var isAvailable = !!(entrySetup || takeProfitSetup || failureExitSetup);
-    var primaryExitSetup = takeProfitSetup || failureExitSetup || null;
 
     return {
-      available: isAvailable,
+      available: true,
       timeframe: timeKey,
       assetType: mode,
       entryZoneLow: entrySetup && entrySetup.zone ? entrySetup.zone.zoneLow : null,
@@ -1482,31 +2024,34 @@
       exitZoneLow: primaryExitSetup && primaryExitSetup.zone ? primaryExitSetup.zone.zoneLow : null,
       exitZoneHigh: primaryExitSetup && primaryExitSetup.zone ? primaryExitSetup.zone.zoneHigh : null,
       exitType: primaryExitSetup ? primaryExitSetup.type : 'No setup',
-      confidence: confidence.label,
-      confidencePoints: confidence.points,
+      confidence: confidenceLabel,
+      confidencePoints: confidencePoints,
+      rewardPct: bestEntry && rewardRisk.rewardPct != null ? rewardRisk.rewardPct : null,
+      riskPct: bestEntry && rewardRisk.riskPct != null ? rewardRisk.riskPct : null,
+      rr: bestEntry && rewardRisk.rr != null ? rewardRisk.rr : null,
       reasons: combinedReasons,
       entryReasons: entrySetup && entrySetup.reasons ? entrySetup.reasons : [],
       takeProfitReasons: takeProfitSetup && takeProfitSetup.reasons ? takeProfitSetup.reasons : [],
       failureExitReasons: failureExitSetup && failureExitSetup.reasons ? failureExitSetup.reasons : [],
       exitReasons: primaryExitSetup && primaryExitSetup.reasons ? primaryExitSetup.reasons : [],
       note: 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.',
-      reason: isAvailable ? '' : 'No clean confluence setup',
+      reason: bestEntry ? '' : rejection,
       debug: {
         timeframe: timeKey,
-        entrySetupType: entrySetup ? entrySetup.type : null,
-        takeProfitSetupType: takeProfitSetup ? takeProfitSetup.type : null,
-        failureExitSetupType: failureExitSetup ? failureExitSetup.type : null,
-        entryCandidates: entryCandidates,
-        exitCandidates: exitCandidates,
-        entryCluster: entrySetup && entrySetup.zone ? entrySetup.zone : null,
-        takeProfitCluster: takeProfitSetup && takeProfitSetup.zone ? takeProfitSetup.zone : null,
-        failureExitCluster: failureExitSetup && failureExitSetup.zone ? failureExitSetup.zone : null,
-        confidencePoints: confidence.points,
-        reasons: combinedReasons
+        atrPct: atrPct,
+        candidateEntryClusters: entryFamilies,
+        candidateSetups: candidateDebug,
+        holderTakeProfitCluster: takeProfitSetup && takeProfitSetup.zone ? takeProfitSetup.zone : null,
+        holderFailureExitCluster: failureExitSetup && failureExitSetup.zone ? failureExitSetup.zone : null,
+        chosenSetup: bestEntry ? bestEntry.type : 'Holder Exit Plan',
+        rewardPct: bestEntry && rewardRisk.rewardPct != null ? rewardRisk.rewardPct : null,
+        riskPct: bestEntry && rewardRisk.riskPct != null ? rewardRisk.riskPct : null,
+        rr: bestEntry && rewardRisk.rr != null ? rewardRisk.rr : null,
+        rejectionReason: bestEntry ? '' : rejection,
+        dump: buildTradePlanDebugDump(timeKey, bestEntry ? bestEntry.type : 'Holder Exit Plan', candidateDebug, bestEntry ? '' : rejection)
       }
     };
   }
-
   function analyze(candles, options) {
     var list = Array.isArray(candles) ? candles : [];
     if (!list.length) {
@@ -1539,6 +2084,8 @@
     var macdLine = latestValue(macdSeries.line);
     var macdSignal = latestValue(macdSeries.signal);
     var macdHistogram = latestValue(macdSeries.histogram);
+    var atrSeries = atr(highs, lows, close, 14);
+    var atr14 = latestValue(atrSeries);
     var adxSeries = adx(highs, lows, close, 14);
     var adx14 = latestValue(adxSeries.adx);
     var adxPlusDI = latestValue(adxSeries.plusDI);
@@ -1649,6 +2196,7 @@
         bbMiddle: bbMiddle,
         bbUpper: bbUpper,
         bbLower: bbLower,
+        atr14: atr14,
         adx14: adx14,
         volumeCurrent: currentVolume,
         volumeMA20: avgVolume20,
@@ -1706,6 +2254,7 @@
         bbUpper: bbUpper,
         bbLower: bbLower,
         bollingerPosition: bollingerPosition,
+        atr14: atr14,
         adx14: adx14,
         adxPlusDI: adxPlusDI,
         adxMinusDI: adxMinusDI,
@@ -1804,6 +2353,9 @@
     bollinger: bollinger,
     computePivotLevels: computePivotLevels,
     computeDonchian: computeDonchian,
+    computeATR14: function (candles) {
+      return atr(highsFromCandles(candles), lowsFromCandles(candles), closesFromCandles(candles), 14);
+    },
     computeADX14: function (candles) {
       return adx(highsFromCandles(candles), lowsFromCandles(candles), closesFromCandles(candles), 14);
     },
@@ -1811,9 +2363,18 @@
       return sma(volumesFromCandles(candles), 20);
     },
     computeVolumeConfirmation: computeVolumeConfirmation,
+    getLevelWeightsForTimeframe: getLevelWeightsForTimeframe,
     collectEntryCandidates: collectEntryCandidates,
+    collectTakeProfitCandidates: collectTakeProfitCandidates,
+    collectFailureExitCandidates: collectFailureExitCandidates,
     collectExitCandidates: collectExitCandidates,
     buildConfluenceZone: buildConfluenceZone,
+    scoreTrendPullbackSetup: scoreTrendPullbackSetup,
+    scoreBounceSetup: scoreBounceSetup,
+    scoreBreakoutSetup: scoreBreakoutSetup,
+    computeRewardRisk: computeRewardRisk,
+    validateTradePlan: validateTradePlan,
+    selectBestTradeSetup: selectBestTradeSetup,
     selectEntrySetup: selectEntrySetup,
     selectTakeProfitSetup: selectTakeProfitSetup,
     selectFailureExitSetup: selectFailureExitSetup,
@@ -1843,9 +2404,18 @@
       findSupportZonesFromPivots: findSupportZonesFromPivots,
       computeEmaPosition: computeEmaPosition,
       fibonacciLookbackFor: fibonacciLookbackFor,
+      getLevelWeightsForTimeframe: getLevelWeightsForTimeframe,
       buildConfluenceZone: buildConfluenceZone,
       collectEntryCandidates: collectEntryCandidates,
+      collectTakeProfitCandidates: collectTakeProfitCandidates,
+      collectFailureExitCandidates: collectFailureExitCandidates,
       collectExitCandidates: collectExitCandidates,
+      scoreTrendPullbackSetup: scoreTrendPullbackSetup,
+      scoreBounceSetup: scoreBounceSetup,
+      scoreBreakoutSetup: scoreBreakoutSetup,
+      computeRewardRisk: computeRewardRisk,
+      validateTradePlan: validateTradePlan,
+      selectBestTradeSetup: selectBestTradeSetup,
       selectEntrySetup: selectEntrySetup,
       selectTakeProfitSetup: selectTakeProfitSetup,
       selectFailureExitSetup: selectFailureExitSetup,

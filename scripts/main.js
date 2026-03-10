@@ -690,8 +690,38 @@
   }
 
   function indicatorSnapshotNeedsRecompute(snapshot, candlePayload) {
+    function zoneMid(low, high) {
+      var lo = Number(low);
+      var hi = Number(high);
+      if (!isFinite(lo) || !isFinite(hi) || lo <= 0 || hi <= 0 || hi < lo) return null;
+      return (lo + hi) / 2;
+    }
+
+    function isInvalidTradePlanSnapshot(plan) {
+      if (!plan || typeof plan !== 'object') return true;
+      var entryMid = zoneMid(plan.entryZoneLow, plan.entryZoneHigh);
+      var takeProfitMid = zoneMid(plan.takeProfitZoneLow, plan.takeProfitZoneHigh);
+      var failureExitMid = zoneMid(plan.failureExitZoneLow, plan.failureExitZoneHigh);
+      var hasZones = entryMid != null && takeProfitMid != null && failureExitMid != null;
+      if (plan.available === false) {
+        return hasZones; // "no setup" should not carry zones; recompute if it does
+      }
+      if (!hasZones) return true;
+      if (!(takeProfitMid > entryMid)) return true;
+      if (!(failureExitMid < entryMid)) return true;
+      if (plan.available === true) {
+        var rewardPct = Number(plan.rewardPct);
+        var riskPct = Number(plan.riskPct);
+        var rr = Number(plan.rr);
+        if (!isFinite(rewardPct) || rewardPct <= 0) return true;
+        if (!isFinite(riskPct) || riskPct <= 0) return true;
+        if (!isFinite(rr) || rr <= 0) return true;
+      }
+      return false;
+    }
+
     if (!snapshot) return true;
-    if (Number(snapshot.engineVersion || 0) < 6) return true;
+    if (Number(snapshot.engineVersion || 0) < 7) return true;
     var candleTime = candlePayload && candlePayload.latestCandleTime;
     if (candleTime && snapshot.latestCandleTime !== candleTime) return true;
     if (!snapshot.trendMeter) return true;
@@ -703,6 +733,7 @@
     if (!(snapshot.values && snapshot.values.tradePlan)) return true;
     if (!Object.prototype.hasOwnProperty.call(snapshot.values.tradePlan, 'takeProfitType')) return true;
     if (!Object.prototype.hasOwnProperty.call(snapshot.values.tradePlan, 'failureExitType')) return true;
+    if (isInvalidTradePlanSnapshot(snapshot.values.tradePlan)) return true;
     return false;
   }
 
@@ -3107,20 +3138,20 @@
 
     function indicatorHelpText(title) {
       var byTitle = {
-        'Trend Meter': 'Trend Meter: Weighted multi-timeframe trend composite built from EMA structure, RSI, MACD, support/resistance, ADX, and volume confirmation.',
-        'Support & Resistance': 'Support & Resistance: Combines Pivot levels and Donchian channel structure to highlight likely reaction zones around price.',
-        'EMA Trend': 'EMA Trend: Uses EMA20/EMA50/EMA200 structure with close location to show whether short/medium/long trend alignment is bullish, bearish, or mixed.',
-        'RSI 14': 'RSI 14: Wilder momentum oscillator (0-100). Overbought is typically above 70 and oversold is typically below 30; mid-range values are usually neutral momentum.',
-        'MACD': 'MACD: Difference between fast and slow EMAs plus signal line/histogram. Confirms momentum direction and acceleration.',
-        'Bollinger': 'Bollinger: 20-period mean with 2 standard deviation bands. Helps read relative stretch and volatility context.',
-        'ADX 14': 'ADX 14: Trend-strength gauge. Higher ADX means stronger directional regime; lower ADX suggests weaker/sideways structure.',
-        'Volume Confirm': 'Volume Confirm: Compares current volume to MA20 and candle direction to confirm whether moves are supported by participation.',
-        'Fibonacci': 'Fibonacci: Local retracement levels from swing high/low (23.6/38.2/50/61.8/78.6) used to frame pullback and structure risk zones.',
-        'EMA Position': 'EMA Position: Explains where current price sits versus EMA20 and EMA50 (strong bullish, pullback, trend test, or bearish risk).',
-        'Reversal': 'Reversal: Early bounce/reversal setup score based on oversold conditions, support proximity, momentum improvement, and volume clues.',
-        'Trade Plan': 'Trade Plan: Estimated entry, take-profit, and failure-exit zones from multi-indicator confluence. Informational only, not execution advice.'
+        'Trend Meter': 'Trend Meter: A simple trend score. It combines moving averages, RSI, MACD, support/resistance, ADX, and volume across timeframes. Higher is usually stronger.',
+        'Support & Resistance': 'Support & Resistance: Support is where price often finds buyers. Resistance is where price often finds sellers. These are common bounce or rejection zones.',
+        'EMA Trend': 'EMA Trend: Compares the 20, 50, and 200 moving averages to show if trend direction is mostly up, down, or mixed.',
+        'RSI 14': 'RSI 14: Momentum gauge from 0 to 100. Above 70 can mean overbought, below 30 can mean oversold.',
+        'MACD': 'MACD: Momentum trend signal. When MACD is above its signal line, momentum is improving; below can mean weakening momentum.',
+        'Bollinger': 'Bollinger: A moving average with upper/lower bands. Price near outer bands can mean price is stretched.',
+        'ADX 14': 'ADX 14: Trend strength only (not direction). Higher ADX means a stronger trend; low ADX often means choppy/sideways action.',
+        'Volume Confirm': 'Volume Confirm: Checks if move strength is supported by trading volume. Strong moves are more reliable when volume is above normal.',
+        'Fibonacci': 'Fibonacci: Common pullback levels traders watch (23.6, 38.2, 50, 61.8, 78.6) for possible support or resistance.',
+        'EMA Position': 'EMA Position: Shows where price is vs EMA20 and EMA50 to spot strength, pullback, or weakness.',
+        'Reversal': 'Reversal: Estimates chance of a bounce after weakness using oversold signals, support, momentum shift, and volume.',
+        'Trade Plan': 'Trade Plan: Suggested entry, take-profit, and failure-exit zones from indicator confluence. For planning only, not guaranteed.'
       };
-      return byTitle[String(title || '').trim()] || 'Technical indicator snapshot used for directional context and risk framing.';
+      return byTitle[String(title || '').trim()] || 'Quick indicator summary used to understand trend, momentum, and risk.';
     }
 
     function trendMeterBlock() {
@@ -3335,26 +3366,56 @@
       return fmtIndicator(zoneLow) + ' - ' + fmtIndicator(zoneHigh);
     }
 
+    function tradePlanZoneMid(low, high) {
+      var zoneLow = Number(low);
+      var zoneHigh = Number(high);
+      if (!isFinite(zoneLow) || !isFinite(zoneHigh) || zoneLow <= 0 || zoneHigh <= 0 || zoneHigh < zoneLow) return null;
+      return (zoneLow + zoneHigh) / 2;
+    }
+
+    function isTradePlanRenderable(plan) {
+      var payload = plan || {};
+      // Ensure Caution plans are visible with warning
+      return payload.available === true;
+    }
+
     function tradeConfidencePillClass(label) {
       var normalized = String(label || '').toLowerCase();
-      if (normalized === 'high') return 'indicator-pill indicator-pill--bullish';
-      if (normalized === 'medium') return 'indicator-pill indicator-pill--pullback';
+      if (normalized === 'strong' || normalized === 'high') return 'indicator-pill indicator-pill--bullish';
+      if (normalized === 'moderate' || normalized === 'medium') return 'indicator-pill indicator-pill--pullback';
       return 'indicator-pill indicator-pill--neutral';
+    }
+
+    function friendlyTradeConfidenceLabel(label) {
+      var normalized = String(label || '').toLowerCase();
+      if (normalized === 'strong' || normalized === 'high') return 'Strong';
+      if (normalized === 'moderate' || normalized === 'medium') return 'Moderate';
+      return 'Caution';
     }
 
     function tradePlanBlock(tf) {
       var plan = (tf && tf.tradePlan) || (tf && tf.values && tf.values.tradePlan) || {};
-      var entryType = String(plan.entryType || 'No setup');
-      var confidence = String(plan.confidence || 'Low');
+      var planValid = isTradePlanRenderable(plan);
+      var entryType = planValid ? String(plan.entryType || 'No setup') : 'No setup';
+      var confidence = planValid ? friendlyTradeConfidenceLabel(plan.confidence || 'Caution') : 'Caution';
       var reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
-      var entryZone = formatTradeZone(plan.entryZoneLow, plan.entryZoneHigh);
-      var takeProfitZone = formatTradeZone(plan.takeProfitZoneLow, plan.takeProfitZoneHigh);
-      var failureExitZone = formatTradeZone(plan.failureExitZoneLow, plan.failureExitZoneHigh);
+      var entryZone = planValid ? formatTradeZone(plan.entryZoneLow, plan.entryZoneHigh) : 'No setup';
+      var takeProfitZone = planValid ? formatTradeZone(plan.takeProfitZoneLow, plan.takeProfitZoneHigh) : 'No clear take-profit zone';
+      var failureExitZone = planValid ? formatTradeZone(plan.failureExitZoneLow, plan.failureExitZoneHigh) : 'No clear failure exit';
+      var rrValue = planValid ? Number(plan.rr) : NaN;
+      var rrText = Number.isFinite(rrValue) ? (rrValue.toFixed(2) + 'x') : 'n/a';
       if (takeProfitZone === 'No setup') takeProfitZone = 'No clear take-profit zone';
       if (failureExitZone === 'No setup') failureExitZone = 'No clear failure exit';
-      var planReason = reasons.length ? reasons.slice(0, 3).join(' • ') : String(plan.reason || 'No clean confluence setup');
-      var hasData = !!plan.available || entryType !== 'No setup' || takeProfitZone !== 'No clear take-profit zone' || failureExitZone !== 'No clear failure exit';
-      var confidenceText = hasData ? (confidence + ' (' + String(Number(plan.confidencePoints || 0)) + ')') : 'Low (0)';
+      var planReason = planValid
+        ? (reasons.length ? reasons.slice(0, 3).join(' • ') : String(plan.reason || 'No clean confluence setup'))
+        : String(plan.reason || 'No setup: invalid zone ordering');
+      var hasData = planValid;
+      var confidenceText = hasData ? (confidence + ' (' + String(Number(plan.confidencePoints || 0)) + ')') : 'Caution (0)';
+      var confidenceNote = hasData
+        ? (String(confidence).toLowerCase() === 'caution'
+          ? 'Confidence: Caution. Caution: Lower conviction (weaker RR/confluence/momentum) - smaller position recommended'
+          : ('Confidence: ' + confidence))
+        : 'Confidence: Caution';
       return '<div class="indicator-tech indicator-tech--tradeplan">' +
         '<div class="indicator-tech__head">' +
           '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + escapeHtml(indicatorHelpText('Trade Plan')) + '" aria-label="Trade plan explanation">Trade Plan</div></div>' +
@@ -3365,10 +3426,12 @@
           '<div class="indicator-sr__metric indicator-tech__metric"><span>Take Profit</span><strong>' + escapeHtml(takeProfitZone) + '</strong></div>' +
           '<div class="indicator-sr__metric indicator-tech__metric"><span>Failure Exit</span><strong>' + escapeHtml(failureExitZone) + '</strong></div>' +
         '</div>' +
-        '<div class="indicator-tech__metrics indicator-tech__metrics--2">' +
+        '<div class="indicator-tech__metrics indicator-tech__metrics--3">' +
           '<div class="indicator-sr__metric indicator-tech__metric"><span>Entry Type</span><strong>' + escapeHtml(entryType) + '</strong></div>' +
-          '<div class="indicator-sr__metric indicator-tech__metric"><span>Confidence</span><strong>' + escapeHtml(confidenceText) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>Setup Quality</span><strong>' + escapeHtml(confidenceText) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>RR</span><strong>' + escapeHtml(rrText) + '</strong></div>' +
         '</div>' +
+        '<div class="indicator-tech__note">' + escapeHtml(confidenceNote) + '</div>' +
         '<div class="indicator-tech__note indicator-trade-plan__reasons">' + escapeHtml(planReason) + '</div>' +
         '<div class="indicator-tech__note indicator-trade-plan__disclaimer">' + escapeHtml(String(plan.note || 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.')) + '</div>' +
       '</div>';
@@ -4098,24 +4161,24 @@
 
     function metricExplanation(metric) {
       var byId = {
-        'revenue-growth-yoy': 'Revenue Growth YoY: Percentage change in company revenue compared to the same period last year. Higher growth usually indicates expanding demand and business momentum.',
-        'eps-growth-yoy': 'EPS Growth YoY: Year-over-year growth in earnings per share. Rising EPS suggests improving profitability and shareholder value.',
-        'margin': 'Operating Margin: Percentage of revenue left after operating expenses. Higher margins mean the company runs its core business more efficiently.',
-        'free-cash-flow': 'Free Cash Flow: Cash remaining after operating expenses and capital investments. Positive FCF means the company generates real cash it can use for growth, debt reduction, or shareholder returns.',
-        'debt-equity': 'Debt / Equity: Compares company debt to shareholder equity. Lower values usually indicate lower financial risk and a stronger balance sheet.',
-        'roe': 'ROE: Profit generated for each dollar of shareholder equity. Higher ROE generally means the company uses investor capital efficiently.',
-        'piotroski': 'Piotroski Score: A 0-9 score measuring financial strength using profitability, leverage, and operating efficiency signals. Scores of 7 or higher typically indicate strong fundamentals.',
-        'altman-z': 'Altman Z-Score: Measures bankruptcy risk using profitability, leverage, liquidity, and activity ratios. Scores above 3 suggest a financially healthy company.',
-        'pe': 'P/E: Stock price divided by earnings per share. Lower values may indicate cheaper valuation, while higher values can reflect growth expectations.',
-        'ps': 'P/S: Company valuation relative to its revenue. Lower values suggest a cheaper valuation compared to sales.',
-        'ev-ebitda': 'EV/EBITDA: Compares total company value to operating earnings before non-cash expenses. Lower ratios generally indicate a more attractive valuation.',
-        'price-to-fcf': 'P/FCF: Stock price relative to free cash flow per share. Lower values suggest investors are paying less for the company\'s cash generation.'
+        'revenue-growth-yoy': 'Revenue Growth YoY: How much sales grew vs the same period last year. Higher usually means demand is improving.',
+        'eps-growth-yoy': 'EPS Growth YoY: How much earnings per share grew vs last year. Rising EPS can mean profits are improving.',
+        'margin': 'Operating Margin: Percent of sales left after core operating costs. Higher margin usually means better efficiency.',
+        'free-cash-flow': 'Free Cash Flow: Cash left after running the business and required spending. Positive FCF is usually a good sign.',
+        'debt-equity': 'Debt / Equity: Debt compared with shareholder capital. Lower often means less balance-sheet risk.',
+        'roe': 'ROE: Profit generated from shareholder money. Higher can mean management is using capital well.',
+        'piotroski': 'Piotroski Score: Financial strength score from 0 to 9. Higher is generally better (7+ is often considered strong).',
+        'altman-z': 'Altman Z-Score: Financial stress risk score. Higher usually means lower bankruptcy risk.',
+        'pe': 'P/E: Price compared with earnings. Lower can be cheaper, but context and growth still matter.',
+        'ps': 'P/S: Price compared with sales. Lower can mean a cheaper valuation.',
+        'ev-ebitda': 'EV/EBITDA: Company value compared with operating earnings. Lower often means a cheaper valuation.',
+        'price-to-fcf': 'P/FCF: Price compared with free cash flow. Lower means investors pay less for each unit of cash flow.'
       };
       var id = String(metric && metric.id || '').trim().toLowerCase();
       var text = byId[id] || String(metric && metric.hint || '').trim();
       if (!text) {
         var label = String(metric && metric.label || 'Metric').trim();
-        text = label + ': Core fundamentals metric used in the FA panel.';
+        text = label + ': A fundamentals metric used to judge business quality or valuation.';
       }
       return text;
     }

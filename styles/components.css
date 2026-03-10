@@ -3806,7 +3806,7 @@ html[data-theme="light"] #detailPanel .news-source-select {
   border: 1px solid var(--border-soft);
   background: rgba(3, 10, 22, 0.97);
   color: var(--text);
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   line-height: 1.36;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
   pointer-events: none;
@@ -4684,6 +4684,8 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
 .panel-viewer-preview--allocation .allocation-viewer-legend,
 .panel-viewer-preview > .portfolio-list #portfolioList,
 .panel-viewer-preview #newsPanel #newsList,
+.indicator-explorer-main,
+.indicator-explorer-side,
 .link-viewer-modal {
   scrollbar-width: thin;
   scrollbar-color: var(--scroll-thumb) var(--scroll-track);
@@ -4694,6 +4696,8 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
 .panel-viewer-preview--allocation .allocation-viewer-legend::-webkit-scrollbar,
 .panel-viewer-preview > .portfolio-list #portfolioList::-webkit-scrollbar,
 .panel-viewer-preview #newsPanel #newsList::-webkit-scrollbar,
+.indicator-explorer-main::-webkit-scrollbar,
+.indicator-explorer-side::-webkit-scrollbar,
 .link-viewer-modal::-webkit-scrollbar {
   width: 11px;
   height: 11px;
@@ -4704,6 +4708,8 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
 .panel-viewer-preview--allocation .allocation-viewer-legend::-webkit-scrollbar-track,
 .panel-viewer-preview > .portfolio-list #portfolioList::-webkit-scrollbar-track,
 .panel-viewer-preview #newsPanel #newsList::-webkit-scrollbar-track,
+.indicator-explorer-main::-webkit-scrollbar-track,
+.indicator-explorer-side::-webkit-scrollbar-track,
 .link-viewer-modal::-webkit-scrollbar-track {
   background: var(--scroll-track);
   border-radius: 999px;
@@ -4714,6 +4720,8 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
 .panel-viewer-preview--allocation .allocation-viewer-legend::-webkit-scrollbar-thumb,
 .panel-viewer-preview > .portfolio-list #portfolioList::-webkit-scrollbar-thumb,
 .panel-viewer-preview #newsPanel #newsList::-webkit-scrollbar-thumb,
+.indicator-explorer-main::-webkit-scrollbar-thumb,
+.indicator-explorer-side::-webkit-scrollbar-thumb,
 .link-viewer-modal::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border: 2px solid var(--scroll-track);
@@ -4725,6 +4733,8 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
 .panel-viewer-preview--allocation .allocation-viewer-legend::-webkit-scrollbar-thumb:hover,
 .panel-viewer-preview > .portfolio-list #portfolioList::-webkit-scrollbar-thumb:hover,
 .panel-viewer-preview #newsPanel #newsList::-webkit-scrollbar-thumb:hover,
+.indicator-explorer-main::-webkit-scrollbar-thumb:hover,
+.indicator-explorer-side::-webkit-scrollbar-thumb:hover,
 .link-viewer-modal::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
 }
@@ -4957,11 +4967,49 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
   align-self: start;
   position: sticky;
   top: 0.18rem;
+  display: grid;
+  gap: 0.54rem;
+  padding: 0.52rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.92rem;
+  background:
+    linear-gradient(168deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    radial-gradient(circle at 9% -42%, rgba(44, 182, 255, 0.16), transparent 62%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 #panelViewerModal[data-panel-type="fundamentals"] .panel-viewer-preview--fundamentals .fundamentals-expanded-right .fundamentals-section--risk {
   border-top: 0;
   padding-top: 0;
+  margin: 0;
+  gap: 0.44rem;
+}
+
+#panelViewerModal[data-panel-type="fundamentals"] .panel-viewer-preview--fundamentals .fundamentals-expanded-right .fundamentals-risk-row {
+  padding: 0.4rem 0.48rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+#panelViewerModal[data-panel-type="fundamentals"] .panel-viewer-preview--fundamentals .fundamentals-expanded-right .fundamentals-risk-row__reasons span {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+html[data-theme="light"] #panelViewerModal[data-panel-type="fundamentals"] .panel-viewer-preview--fundamentals .fundamentals-expanded-right {
+  border-color: rgba(15, 23, 42, 0.1);
+  background:
+    linear-gradient(168deg, rgba(255, 255, 255, 0.95), rgba(247, 251, 255, 0.9)),
+    radial-gradient(circle at 8% -45%, rgba(44, 182, 255, 0.1), transparent 64%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+html[data-theme="light"] #panelViewerModal[data-panel-type="fundamentals"] .panel-viewer-preview--fundamentals .fundamentals-expanded-right .fundamentals-risk-row {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.02);
+}
+
+html[data-theme="light"] #panelViewerModal[data-panel-type="fundamentals"] .panel-viewer-preview--fundamentals .fundamentals-expanded-right .fundamentals-risk-row__reasons span {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.03);
 }
 
 .panel-viewer-preview > .indicators-panel,
@@ -5052,6 +5100,7 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
   grid-template-columns: minmax(0, 1.52fr) minmax(380px, 1fr);
   gap: 0.9rem;
   align-items: start;
+  min-height: 0;
 }
 
 .indicator-explorer-head-actions {
@@ -5532,6 +5581,33 @@ html[data-theme="light"] .link-viewer-host.is-blocked .link-viewer-fallback {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
+}
+
+#indicatorExplorerModal #indicatorExplorerFavoritesPage,
+#indicatorExplorerModal #indicatorExplorerLayout {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (min-width: 1221px) {
+  #indicatorExplorerModal .modal__dialog--wide {
+    display: flex;
+    flex-direction: column;
+    gap: 0.72rem;
+    overflow: hidden;
+  }
+
+  #indicatorExplorerModal #indicatorExplorerLayout {
+    align-items: stretch;
+  }
+
+  #indicatorExplorerModal .indicator-explorer-main,
+  #indicatorExplorerModal .indicator-explorer-side {
+    min-height: 0;
+    max-height: 100%;
+    overflow: auto;
+    padding-right: 0.08rem;
+  }
 }
 
 .indicator-explorer-side .panel-block--fundamentals,
@@ -6157,7 +6233,7 @@ html[data-theme="light"] .api-source-card {
 
   .fundamentals-help-tooltip {
     max-width: min(300px, calc(100vw - 16px));
-    font-size: 0.64rem;
+    font-size: 0.74rem;
   }
 
   .panel-block--indicators {

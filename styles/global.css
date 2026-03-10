@@ -374,6 +374,10 @@ html[data-layout="wide"] .portfolio-grid {
     min-height: 0;
   }
 
+  #detailPanel > .panel-block {
+    min-height: 0;
+  }
+
   #detailPanel > .section-header,
   #detailPanel > .detail-meta,
   #detailPanel > .chart-timeframes,
@@ -398,6 +402,8 @@ html[data-layout="wide"] .portfolio-grid {
   #detailPanel > #linksSocialsBlock .links-socials-stack,
   #detailPanel > #linksSocialsBlock .links-socials-group {
     min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
   }
 
   #detailPanel > #linksSocialsBlock #usefulLinksList.news-list {
@@ -467,6 +473,8 @@ html[data-layout="wide"] .portfolio-grid {
   html[data-layout="wide"] #linksSocialsBlock .links-socials-stack,
   html[data-layout="wide"] #linksSocialsBlock .links-socials-group {
     min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
   }
 
   html[data-layout="wide"] #linksSocialsBlock #usefulLinksList.news-list {
