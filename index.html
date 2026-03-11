@@ -49,11 +49,10 @@
             <button id="stocksTab" class="mode-switch__btn is-active" type="button" data-mode="stocks" role="tab" aria-selected="true">Stocks</button>
             <button id="cryptoTab" class="mode-switch__btn" type="button" data-mode="crypto" role="tab" aria-selected="false">Crypto</button>
           </div>
-          <span id="connectionModeBadge" class="status-badge" title="API connection mode">Direct</span>
         </div>
         <div class="topbar__group topbar__group--actions">
-          <button id="cryptoParticlesToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle particles background">Particles On</button>
-          <button id="uiTransparencyToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle UI transparency">Transparent Off</button>
+          <button id="cryptoParticlesToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle particles background">Particles</button>
+          <button id="uiTransparencyToggle" class="btn btn--ghost btn--tiny hidden" type="button" aria-label="Toggle UI transparency">Transparency</button>
           <button id="apiSourcesBtn" class="btn btn--ghost btn--tiny" type="button" aria-label="Open API source settings" onclick="if(window.PT&&typeof window.PT.openApiSourcesModal!=='function'&&typeof window.PT.forceOpenApiSourcesModal==='function'){window.PT.forceOpenApiSourcesModal();}">API Sources</button>
           <button id="demoModeToggle" class="btn btn--ghost btn--tiny btn--icon" type="button" aria-label="Toggle demo portfolio mode" title="Switch to demo holdings ($1,000 per position)">
             <span class="btn__icon" aria-hidden="true">
@@ -107,7 +106,7 @@
             </span>
             <span>Explore</span>
           </button>
-          <button id="addAssetBtn" class="btn btn--primary" type="button">+ Add Asset</button>
+          <button id="addAssetBtn" class="btn btn--tiny" type="button">+ Add Asset</button>
         </div>
       </div>
     </header>

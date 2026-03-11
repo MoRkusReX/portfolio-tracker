@@ -38,6 +38,7 @@
   var SECTOR_EDIT_NEW_VALUE = '__new_sector__';
   var REFRESH_BTN_FEEDBACK_TIMER = null;
   var PORTFOLIO_CREATE_MODE = null;
+  var MOBILE_TOPBAR_PORTFOLIO_ANCHOR = null;
   var MOBILE_ROW_FOCUS = {
     active: false,
     key: null,
@@ -367,6 +368,22 @@
   function setStatus(text) {
     state.app.status = text;
     ui.setStatus(text);
+  }
+
+  function logConnectionModeOnBoot() {
+    var cfg = window.PT_CONFIG || {};
+    var useLocalProxy = !!cfg.useLocalProxy;
+    var proxyBase = String(
+      cfg.proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin)
+    ).replace(/\/$/, '');
+    try {
+      console.info(
+        '[Startup] API connection mode:',
+        useLocalProxy ? 'proxy' : 'direct',
+        '| base:',
+        proxyBase
+      );
+    } catch (err) {}
   }
 
   function apiSourceCatalog() {
@@ -4664,35 +4681,70 @@
       ? ui.el.indicatorExplorerModal.querySelector('.indicator-explorer-main')
       : null;
     var quickSummaryEl = ui.el.indicatorExplorerQuickSummaryPanel || null;
+    var isMobileExplorerLayout = window.matchMedia('(max-width: 1120px)').matches;
     var indicatorsBlockEl = ui.el.indicatorExplorerAssetLabel
       ? ui.el.indicatorExplorerAssetLabel.closest('.panel-block')
       : null;
     var chartBlockEl = ui.el.indicatorExplorerChart
       ? ui.el.indicatorExplorerChart.closest('.panel-block')
       : null;
-    if (quickSummaryEl) {
-      if (explorerSideEl && chartBlockEl) {
-        if (quickSummaryEl.parentElement !== explorerSideEl || quickSummaryEl.previousSibling !== chartBlockEl) {
-          explorerSideEl.insertBefore(quickSummaryEl, chartBlockEl.nextSibling);
-        }
-      } else if (explorerMainEl && indicatorsBlockEl) {
-        if (quickSummaryEl.parentElement !== explorerMainEl || quickSummaryEl.nextSibling !== indicatorsBlockEl) {
-          explorerMainEl.insertBefore(quickSummaryEl, indicatorsBlockEl);
-        }
-      }
-    }
-    if (explorerSideEl) {
-      explorerSideEl.classList.toggle('hidden', !hasSelection);
-    }
     var explorerFundamentalsBlock = ui.el.indicatorExplorerFundamentalsGrid
       ? ui.el.indicatorExplorerFundamentalsGrid.closest('.panel-block')
       : null;
-    if (explorerFundamentalsBlock) {
-      explorerFundamentalsBlock.classList.toggle('hidden', !hasSelection);
-    }
     var explorerNewsBlock = ui.el.indicatorExplorerNewsList
       ? ui.el.indicatorExplorerNewsList.closest('.panel-block')
       : null;
+    var explorerTimeframesEl = ui.el.indicatorExplorerTimeframes || null;
+    function moveAfter(parentEl, nodeEl, afterEl) {
+      if (!parentEl || !nodeEl) return;
+      if (nodeEl.parentElement !== parentEl) parentEl.appendChild(nodeEl);
+      if (afterEl && afterEl.parentElement === parentEl) {
+        if (nodeEl.previousSibling !== afterEl) {
+          parentEl.insertBefore(nodeEl, afterEl.nextSibling);
+        }
+      } else if (nodeEl !== parentEl.firstChild) {
+        parentEl.insertBefore(nodeEl, parentEl.firstChild);
+      }
+    }
+
+    if (isMobileExplorerLayout && explorerMainEl) {
+      // Mobile Explore order: chart -> quick summary -> fundamentals -> indicators (then timeframes/news).
+      moveAfter(explorerMainEl, chartBlockEl, null);
+      moveAfter(explorerMainEl, quickSummaryEl, chartBlockEl);
+      moveAfter(explorerMainEl, explorerFundamentalsBlock, quickSummaryEl || chartBlockEl || null);
+      moveAfter(explorerMainEl, indicatorsBlockEl, explorerFundamentalsBlock || quickSummaryEl || chartBlockEl || null);
+      moveAfter(explorerMainEl, explorerTimeframesEl, indicatorsBlockEl);
+      moveAfter(explorerMainEl, explorerNewsBlock, explorerTimeframesEl || indicatorsBlockEl || explorerFundamentalsBlock || quickSummaryEl || chartBlockEl || null);
+      if (explorerSideEl) explorerSideEl.classList.add('hidden');
+      explorerMainEl.classList.toggle('hidden', !hasSelection);
+    } else {
+      if (explorerMainEl && indicatorsBlockEl) {
+        if (indicatorsBlockEl.parentElement !== explorerMainEl || indicatorsBlockEl !== explorerMainEl.firstChild) {
+          explorerMainEl.insertBefore(indicatorsBlockEl, explorerMainEl.firstChild);
+        }
+      }
+      if (explorerMainEl && explorerTimeframesEl) {
+        if (explorerTimeframesEl.parentElement !== explorerMainEl || explorerTimeframesEl.previousSibling !== indicatorsBlockEl) {
+          explorerMainEl.insertBefore(explorerTimeframesEl, indicatorsBlockEl ? indicatorsBlockEl.nextSibling : explorerMainEl.firstChild);
+        }
+      }
+      if (explorerSideEl) {
+        moveAfter(explorerSideEl, explorerFundamentalsBlock, null);
+        moveAfter(explorerSideEl, chartBlockEl, explorerFundamentalsBlock);
+        moveAfter(explorerSideEl, quickSummaryEl, chartBlockEl);
+        if (explorerNewsBlock) {
+          if (explorerNewsBlock.parentElement !== explorerSideEl || explorerNewsBlock !== explorerSideEl.lastChild) {
+            explorerSideEl.appendChild(explorerNewsBlock);
+          }
+        }
+        explorerSideEl.classList.toggle('hidden', !hasSelection);
+      }
+      if (explorerMainEl) explorerMainEl.classList.remove('hidden');
+    }
+
+    if (explorerFundamentalsBlock) {
+      explorerFundamentalsBlock.classList.toggle('hidden', !hasSelection);
+    }
     if (explorerNewsBlock) {
       explorerNewsBlock.classList.toggle('hidden', !hasSelection);
     }
@@ -10964,10 +11016,14 @@
       }
       syncApiDebugPanelPosition();
       syncMobilePanelOrder();
+      syncMobilePortfolioSelectorPlacement();
       syncMobileFocusedRowAfterRender();
       if (!canOpenPanelViewer()) {
         if (PANEL_VIEWER.type) closePanelViewer();
         closeDesktopLinkViewer();
+      }
+      if (ui.el.indicatorExplorerModal && !ui.el.indicatorExplorerModal.classList.contains('hidden')) {
+        safeRenderIndicatorExplorer('resize');
       }
     });
   }
@@ -11014,6 +11070,43 @@
     setTimeout(scrollToEnd, 140);
   }
 
+  function syncMobilePortfolioSelectorPlacement() {
+    if (!window.matchMedia) return;
+    var topbar = document.querySelector('.topbar');
+    if (!topbar) return;
+    var selectorWrap = topbar.querySelector('.topbar__portfolio-selector');
+    var actionsWrap = topbar.querySelector('.topbar__actions');
+    var modeGroup = topbar.querySelector('.topbar__group--mode');
+    if (!selectorWrap || !actionsWrap || !modeGroup) return;
+
+    if (!MOBILE_TOPBAR_PORTFOLIO_ANCHOR || MOBILE_TOPBAR_PORTFOLIO_ANCHOR.parentNode !== topbar) {
+      MOBILE_TOPBAR_PORTFOLIO_ANCHOR = document.createComment('topbar-portfolio-selector-anchor');
+      topbar.insertBefore(MOBILE_TOPBAR_PORTFOLIO_ANCHOR, selectorWrap);
+    }
+
+    var useMobilePlacement = window.matchMedia('(max-width: 680px)').matches;
+    if (useMobilePlacement) {
+      var modeSwitch = modeGroup.querySelector('.mode-switch--topbar');
+      if (selectorWrap.parentNode !== modeGroup) {
+        if (modeSwitch && modeSwitch.nextSibling) modeGroup.insertBefore(selectorWrap, modeSwitch.nextSibling);
+        else modeGroup.appendChild(selectorWrap);
+      }
+      selectorWrap.classList.add('topbar__portfolio-selector--inline-mobile');
+      modeGroup.classList.add('topbar__group--mode-has-portfolio');
+      return;
+    }
+
+    selectorWrap.classList.remove('topbar__portfolio-selector--inline-mobile');
+    modeGroup.classList.remove('topbar__group--mode-has-portfolio');
+    if (selectorWrap.parentNode !== topbar) {
+      if (MOBILE_TOPBAR_PORTFOLIO_ANCHOR && MOBILE_TOPBAR_PORTFOLIO_ANCHOR.parentNode === topbar) {
+        topbar.insertBefore(selectorWrap, MOBILE_TOPBAR_PORTFOLIO_ANCHOR.nextSibling || actionsWrap);
+      } else {
+        topbar.insertBefore(selectorWrap, actionsWrap);
+      }
+    }
+  }
+
   // Bootstraps modules, restores persisted state, and starts timers and initial refreshes.
   function boot() {
     ui = PT.UI;
@@ -11021,6 +11114,8 @@
     chartMgr = PT.ChartManager;
 
     ui.init();
+    syncMobilePortfolioSelectorPlacement();
+    logConnectionModeOnBoot();
     if (PT.ApiDebug && typeof PT.ApiDebug.mount === 'function') {
       PT.ApiDebug.mount(ui.el.apiDebugTableBody);
     }

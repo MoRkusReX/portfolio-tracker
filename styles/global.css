@@ -686,6 +686,47 @@ html[data-layout="wide"] .portfolio-grid {
     justify-content: space-between;
   }
 
+  .topbar__group--mode.topbar__group--mode-has-portfolio {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.36rem;
+    flex-wrap: nowrap;
+  }
+
+  .topbar__group--mode.topbar__group--mode-has-portfolio .mode-switch--topbar {
+    width: max-content;
+    min-width: max-content;
+    flex: 0 0 auto;
+  }
+
+  .topbar__group--mode.topbar__group--mode-has-portfolio .mode-switch--topbar .mode-switch__btn {
+    flex: 0 0 auto;
+  }
+
+  .topbar__group--mode .topbar__portfolio-selector--inline-mobile {
+    width: auto;
+    min-width: 0;
+    flex: 0 0 auto;
+    margin-left: auto;
+    justify-content: flex-start;
+    padding: 0.16rem 0.18rem;
+  }
+
+  .topbar__group--mode .topbar__portfolio-selector--inline-mobile select {
+    min-width: 0;
+    width: clamp(6.8rem, 34vw, 9rem);
+    height: 2.18rem;
+    padding-right: 2rem;
+    font-size: 0.78rem;
+  }
+
+  .topbar__group--mode .topbar__portfolio-selector--inline-mobile #portfolioDeleteBtn {
+    width: 2.18rem;
+    min-width: 2.18rem;
+    height: 2.18rem;
+  }
+
   .topbar__group {
     width: 100%;
     border-radius: 1rem;
@@ -745,6 +786,19 @@ html[data-layout="wide"] .portfolio-grid {
 
   .topbar__group--mode .status-badge {
     margin-left: auto;
+  }
+
+  .topbar__group--mode .topbar__portfolio-selector--inline-mobile select {
+    width: clamp(6.15rem, 32vw, 8.3rem);
+    height: 2.06rem;
+    font-size: 0.74rem;
+    padding-right: 1.86rem;
+  }
+
+  .topbar__group--mode .topbar__portfolio-selector--inline-mobile #portfolioDeleteBtn {
+    width: 2.06rem;
+    min-width: 2.06rem;
+    height: 2.06rem;
   }
 
   .topbar__group--actions {

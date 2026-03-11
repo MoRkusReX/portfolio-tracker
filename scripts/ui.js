@@ -588,9 +588,7 @@
     setCryptoParticlesToggle: function (enabled, mode) {
       if (!this.el.cryptoParticlesToggle) return;
       this.el.cryptoParticlesToggle.classList.toggle('hidden', false);
-      this.el.cryptoParticlesToggle.innerHTML = enabled
-        ? '<span aria-hidden="true">●</span> Particles On'
-        : '<span aria-hidden="true">○</span> Particles Off';
+      this.el.cryptoParticlesToggle.textContent = 'Particles';
       this.el.cryptoParticlesToggle.classList.toggle('btn--primary', !!enabled);
       this.el.cryptoParticlesToggle.classList.toggle('btn--ghost', !enabled);
       this.el.cryptoParticlesToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
@@ -604,9 +602,7 @@
     setUiTransparencyToggle: function (enabled) {
       if (!this.el.uiTransparencyToggle) return;
       this.el.uiTransparencyToggle.classList.toggle('hidden', false);
-      this.el.uiTransparencyToggle.innerHTML = enabled
-        ? '<span aria-hidden="true">●</span> Transparent On'
-        : '<span aria-hidden="true">○</span> Transparent Off';
+      this.el.uiTransparencyToggle.textContent = 'Transparency';
       this.el.uiTransparencyToggle.classList.toggle('btn--primary', !!enabled);
       this.el.uiTransparencyToggle.classList.toggle('btn--ghost', !enabled);
       this.el.uiTransparencyToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
@@ -725,12 +721,9 @@
     },
     setConnectionModeBadge: function () {
       if (!this.el.connectionModeBadge) return;
-      var cfg = window.PT_CONFIG || {};
-      var isProxy = !!cfg.useLocalProxy;
-      this.el.connectionModeBadge.textContent = isProxy ? 'Local Proxy' : 'Direct';
-      this.el.connectionModeBadge.title = isProxy
-        ? 'Using proxy: ' + (cfg.proxyBase || (location.protocol === 'file:' ? 'http://localhost:5500' : location.origin))
-        : 'Using direct browser API requests';
+      this.el.connectionModeBadge.textContent = '';
+      this.el.connectionModeBadge.title = '';
+      this.el.connectionModeBadge.classList.add('hidden');
     },
     renderPortfolio: function (ctx) {
       var self = this;
