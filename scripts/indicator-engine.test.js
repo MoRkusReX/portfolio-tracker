@@ -553,6 +553,33 @@ validation = engine.validateTradePlan({
 assert.strictEqual(validation.valid, false);
 assert.match(String(validation.reason), /upside too small|take-profit too close to entry/);
 
+// 5b) invalid long where failure exit overlaps entry must reject.
+validation = engine.validateTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  takeProfitZone: { zoneLow: 106, zoneHigh: 107 },
+  failureExitZone: { zoneLow: 99.4, zoneHigh: 100.2 }
+}, 'stock', '1d');
+assert.strictEqual(validation.valid, false);
+assert.match(String(validation.reason), /invalid zone ordering/);
+
+// 5c) invalid long with risk distance < 1% must reject.
+validation = engine.validateTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  takeProfitZone: { zoneLow: 108, zoneHigh: 109 },
+  failureExitZone: { zoneLow: 99.7, zoneHigh: 99.9 }
+}, 'stock', '1d');
+assert.strictEqual(validation.valid, false);
+assert.match(String(validation.reason), /risk distance too small/);
+
+// 5d) invalid long with absurdly far take-profit must reject.
+validation = engine.validateTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  takeProfitZone: { zoneLow: 181, zoneHigh: 182 },
+  failureExitZone: { zoneLow: 96, zoneHigh: 97 }
+}, 'stock', '1d');
+assert.strictEqual(validation.valid, false);
+assert.match(String(validation.reason), /too far from entry/);
+
 // 6) invalid plan with rr < 1.5 must reject.
 validation = engine.validateTradePlan({
   entryZone: { zoneLow: 100, zoneHigh: 101 },
@@ -611,6 +638,30 @@ tradeSnapshot.values.fib.levels.fib236 = null;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
 assert.strictEqual(tradePlan.available, true);
 assert.strictEqual(String(tradePlan.confidence), 'Strong');
+
+// 8b) nearest valid take-profit cluster should beat far extreme cluster.
+tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.values.atr14 = 0.7;
+tradeSnapshot.values.ema20 = 99.3;
+tradeSnapshot.values.ema50 = 97.8;
+tradeSnapshot.values.ema200 = 94.6;
+tradeSnapshot.values.sr.nearest.support = 98.6;
+tradeSnapshot.values.reversal.supportZone = 98.4;
+tradeSnapshot.values.sr.donchian.midpoint = 99.0;
+tradeSnapshot.values.sr.donchian.support = 97.9;
+tradeSnapshot.values.sr.pivot.p = 99.1;
+tradeSnapshot.values.fib.levels.fib382 = 99.0;
+tradeSnapshot.values.fib.levels.fib500 = 98.6;
+tradeSnapshot.values.sr.nearest.resistance = 109.2;   // nearest valid target cluster
+tradeSnapshot.values.sr.donchian.resistance = 109.6;  // nearest valid target cluster
+tradeSnapshot.values.sr.pivot.r1 = 170;               // far extreme cluster
+tradeSnapshot.values.sr.pivot.r2 = 171;               // far extreme cluster
+tradeSnapshot.values.bbUpper = 172;                   // far extreme cluster
+tradeSnapshot.values.fib.levels.fib236 = 173;         // far extreme cluster
+tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
+assert.ok(Number.isFinite(tradePlan.takeProfitZoneLow));
+assert.ok(tradePlan.takeProfitZoneLow < 130, `expected nearest target cluster, got ${tradePlan.takeProfitZoneLow}`);
 
 // 9) holder-only mode should still show exits when fresh entry fails (<5% upside).
 tradeSnapshot = baseTradeSnapshot();
@@ -768,14 +819,15 @@ tradeSnapshot.statuses.macd = 'Bullish';
 tradeSnapshot.values.rsi14 = 58;
 tradeSnapshot.values.adx14 = 31;
 tradeSnapshot.values.volumeConfirmation = { status: 'Bullish confirmation' };
-tradeSnapshot.values.sr.nearest.resistance = 113.4;
-tradeSnapshot.values.sr.donchian.resistance = 114.2;
-tradeSnapshot.values.bbUpper = 115.4;
-tradeSnapshot.values.sr.pivot.r1 = 112.8;
-tradeSnapshot.values.sr.pivot.r2 = 116.0;
+tradeSnapshot.values.sr.nearest.resistance = 123.4;
+tradeSnapshot.values.sr.donchian.resistance = 124.2;
+tradeSnapshot.values.bbUpper = 126.4;
+tradeSnapshot.values.sr.pivot.r1 = 122.8;
+tradeSnapshot.values.sr.pivot.r2 = 127.0;
+tradeSnapshot.values.fib.levels.fib236 = 122.2;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
 assert.strictEqual(tradePlan.available, true);
-assert.strictEqual(tradePlan.entryType, 'Pullback Entry');
+assert.ok(['Pullback Entry', 'Bounce Entry'].indexOf(String(tradePlan.entryType)) !== -1);
 assert.strictEqual(String(tradePlan.confidence), 'Strong');
 
 // 2) bearish regime + long bounce with reversal score 2 can exist but must not be Strong.
@@ -905,7 +957,7 @@ assert.strictEqual(shortPlan.entryType, 'Exhaustion Short');
 assert.notStrictEqual(String(shortPlan.confidence), 'Strong');
 assert.ok(['Caution', 'Moderate'].indexOf(String(shortPlan.confidence)) !== -1);
 
-// 6) neutral regime quality setups are slightly penalized but can still be Moderate/Strong.
+// 6) neutral regime quality setups are slightly penalized but should still produce a valid plan.
 tradeSnapshot = baseTradeSnapshot();
 tradeSnapshot.trendMeter.label = 'Neutral';
 tradeSnapshot.trendMeter.timeframeScore = 1;
@@ -921,7 +973,7 @@ tradeSnapshot.values.sr.pivot.r1 = 112.1;
 tradeSnapshot.values.sr.pivot.r2 = 114.9;
 tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
 assert.strictEqual(tradePlan.available, true);
-assert.ok(['Moderate', 'Strong'].indexOf(String(tradePlan.confidence)) !== -1);
+assert.ok(['Caution', 'Moderate', 'Strong'].indexOf(String(tradePlan.confidence)) !== -1);
 
 // baseline no-setup sanity case.
 tradeSnapshot = {

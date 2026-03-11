@@ -345,8 +345,12 @@
     crypto: 1.5
   };
   var TRADE_CLOSE_GUARD_PCT = {
-    stock: 5.0,
-    crypto: 5.0
+    stock: 2.0,
+    crypto: 3.0
+  };
+  var TRADE_MAX_TARGET_MULTIPLIER = {
+    stock: 1.8,
+    crypto: 2.5
   };
 
   function fibonacciLookbackFor(timeKey, assetType, availableCount) {
@@ -1157,6 +1161,11 @@
     };
   }
 
+  function tradeMaxTargetMultiplier(assetType) {
+    var mode = normalizeAssetType(assetType);
+    return toNumber(TRADE_MAX_TARGET_MULTIPLIER[mode]) || 1.8;
+  }
+
   function uniqueStrings(list) {
     var seen = {};
     var out = [];
@@ -1204,9 +1213,9 @@
     return out;
   }
 
-  function buildConfluenceZone(levels, assetType, zoneType, atrPct, timeframe, options) {
+  function buildConfluenceZoneCandidates(levels, assetType, zoneType, atrPct, timeframe, options) {
     var candidates = normalizeCandidateLevels(levels);
-    if (!candidates.length) return null;
+    if (!candidates.length) return [];
     var opts = options || {};
     var atrPercent = toNumber(atrPct);
     if (arguments.length <= 4 && atrPct && typeof atrPct === 'object' && !Array.isArray(atrPct)) {
@@ -1261,7 +1270,7 @@
         items: [item]
       });
     });
-    if (!clusters.length) return null;
+    if (!clusters.length) return [];
 
     clusters.forEach(function (cluster) {
       var center = cluster.weightSum > 0 ? (cluster.weightedSum / cluster.weightSum) : ((cluster.low + cluster.high) / 2);
@@ -1279,55 +1288,114 @@
       return b.center - a.center;
     });
 
-    var selected = clusters[0];
-    if (!selected) return null;
-    var representativeLevel = selected.center;
-    var zoneLow = selected.low;
-    var zoneHigh = selected.high;
     var zoneKind = String(zoneType || 'support').toLowerCase();
-    if (selected.count === 1) {
-      zoneLow = representativeLevel * (1 - (halfWidthPct / 100));
-      zoneHigh = representativeLevel * (1 + (halfWidthPct / 100));
-    } else {
-      var minimumBand = representativeLevel * (halfWidthPct / 100) * 0.8;
-      if ((zoneHigh - zoneLow) < minimumBand) {
-        var mid = (zoneLow + zoneHigh) / 2;
-        zoneLow = mid - (minimumBand / 2);
-        zoneHigh = mid + (minimumBand / 2);
+    var zones = [];
+    clusters.forEach(function (cluster) {
+      var representativeLevel = cluster.center;
+      var zoneLow = cluster.low;
+      var zoneHigh = cluster.high;
+      if (cluster.count === 1) {
+        zoneLow = representativeLevel * (1 - (halfWidthPct / 100));
+        zoneHigh = representativeLevel * (1 + (halfWidthPct / 100));
+      } else {
+        var minimumBand = representativeLevel * (halfWidthPct / 100) * 0.8;
+        if ((zoneHigh - zoneLow) < minimumBand) {
+          var mid = (zoneLow + zoneHigh) / 2;
+          zoneLow = mid - (minimumBand / 2);
+          zoneHigh = mid + (minimumBand / 2);
+        }
       }
-    }
-    if (zoneKind === 'breakout') {
-      var breakoutBand = breakoutBandPctForAsset(assetType, atrPercent);
-      var breakoutBase = Math.max(selected.high, representativeLevel);
-      zoneLow = Math.max(zoneLow, breakoutBase * (1 + (breakoutBand.low / 100)));
-      zoneHigh = Math.max(zoneHigh, breakoutBase * (1 + (breakoutBand.high / 100)));
-    } else if (zoneKind === 'breakdown') {
-      var breakdownBand = breakoutBandPctForAsset(assetType, atrPercent);
-      var breakdownBase = Math.min(selected.low, representativeLevel);
-      zoneLow = Math.min(zoneLow, breakdownBase * (1 - (breakdownBand.high / 100)));
-      zoneHigh = Math.min(zoneHigh, breakdownBase * (1 - (breakdownBand.low / 100)));
-    }
+      if (zoneKind === 'breakout') {
+        var breakoutBand = breakoutBandPctForAsset(assetType, atrPercent);
+        var breakoutBase = Math.max(cluster.high, representativeLevel);
+        zoneLow = Math.max(zoneLow, breakoutBase * (1 + (breakoutBand.low / 100)));
+        zoneHigh = Math.max(zoneHigh, breakoutBase * (1 + (breakoutBand.high / 100)));
+      } else if (zoneKind === 'breakdown') {
+        var breakdownBand = breakoutBandPctForAsset(assetType, atrPercent);
+        var breakdownBase = Math.min(cluster.low, representativeLevel);
+        zoneLow = Math.min(zoneLow, breakdownBase * (1 - (breakdownBand.high / 100)));
+        zoneHigh = Math.min(zoneHigh, breakdownBase * (1 - (breakdownBand.low / 100)));
+      }
+      if (!(isFinite(zoneLow) && isFinite(zoneHigh)) || zoneLow <= 0 || zoneHigh <= 0 || zoneHigh < zoneLow) return;
+      zones.push({
+        zoneLow: zoneLow,
+        zoneHigh: zoneHigh,
+        zoneMid: midpoint(zoneLow, zoneHigh),
+        representativeLevel: representativeLevel,
+        confluenceCount: cluster.count,
+        totalWeight: cluster.weight,
+        structuralImportance: cluster.weight,
+        score: cluster.score,
+        distanceToReference: cluster.distanceToRef,
+        reasons: uniqueStrings(cluster.items.map(function (item) { return item.reason; })),
+        levelKeys: uniqueStrings(cluster.items.map(function (item) { return item.key; })),
+        levels: cluster.items.map(function (item) {
+          return {
+            key: item.key,
+            value: item.value,
+            reason: item.reason,
+            weight: item.weight
+          };
+        })
+      });
+    });
+    return zones;
+  }
 
-    if (!(isFinite(zoneLow) && isFinite(zoneHigh)) || zoneLow <= 0 || zoneHigh <= 0 || zoneHigh < zoneLow) return null;
+  function buildConfluenceZone(levels, assetType, zoneType, atrPct, timeframe, options) {
+    var zones = buildConfluenceZoneCandidates(levels, assetType, zoneType, atrPct, timeframe, options);
+    if (!Array.isArray(zones) || !zones.length) return null;
+    return zones[0];
+  }
+
+  function selectNearestValidZone(zoneCandidates, entryZone, direction, options) {
+    var zones = Array.isArray(zoneCandidates) ? zoneCandidates.slice() : [];
+    if (!zones.length) return null;
+    var opts = options || {};
+    var entryLow = toNumber(entryZone && entryZone.zoneLow);
+    var entryHigh = toNumber(entryZone && entryZone.zoneHigh);
+    var entryMid = midpoint(entryLow, entryHigh);
+    if (entryLow == null || entryHigh == null || entryHigh < entryLow) return null;
+    var dir = String(direction || '').toLowerCase() === 'below' ? 'below' : 'above';
+
+    var filtered = zones.filter(function (zone) {
+      if (!zone || !isFinite(zone.zoneLow) || !isFinite(zone.zoneHigh)) return false;
+      if (dir === 'above') {
+        if (!(zone.zoneLow > entryHigh)) return false;
+      } else {
+        if (!(zone.zoneHigh < entryLow)) return false;
+      }
+      if (typeof opts.boundaryValidator === 'function' && !opts.boundaryValidator(zone, entryLow, entryHigh)) return false;
+      if (isFinite(Number(opts.maxTargetMultiple)) && entryMid != null && entryMid > 0 && zone.zoneMid != null) {
+        var multiple = Number(opts.maxTargetMultiple);
+        if (dir === 'above' && zone.zoneMid > (entryMid * multiple)) return false;
+        if (dir === 'below' && zone.zoneMid < (entryMid / multiple)) return false;
+      }
+      return true;
+    });
+    if (!filtered.length) return null;
+
+    filtered.forEach(function (zone) {
+      if (dir === 'above') zone.distanceFromEntry = Math.max(0, Number(zone.zoneLow) - entryHigh);
+      else zone.distanceFromEntry = Math.max(0, entryLow - Number(zone.zoneHigh));
+    });
+
+    filtered.sort(function (a, b) {
+      if (a.distanceFromEntry !== b.distanceFromEntry) return a.distanceFromEntry - b.distanceFromEntry;
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.structuralImportance !== a.structuralImportance) return b.structuralImportance - a.structuralImportance;
+      if (b.confluenceCount !== a.confluenceCount) return b.confluenceCount - a.confluenceCount;
+      return a.distanceToReference - b.distanceToReference;
+    });
+    return filtered[0];
+  }
+
+  function buildReferenceZoneFromPrice(price) {
+    var p = toNumber(price);
+    if (p == null || p <= 0) return null;
     return {
-      zoneLow: zoneLow,
-      zoneHigh: zoneHigh,
-      zoneMid: midpoint(zoneLow, zoneHigh),
-      representativeLevel: representativeLevel,
-      confluenceCount: selected.count,
-      totalWeight: selected.weight,
-      structuralImportance: selected.weight,
-      score: selected.score,
-      reasons: uniqueStrings(selected.items.map(function (item) { return item.reason; })),
-      levelKeys: uniqueStrings(selected.items.map(function (item) { return item.key; })),
-      levels: selected.items.map(function (item) {
-        return {
-          key: item.key,
-          value: item.value,
-          reason: item.reason,
-          weight: item.weight
-        };
-      })
+      zoneLow: p,
+      zoneHigh: p
     };
   }
 
@@ -1748,6 +1816,7 @@
     var candidate = setup || {};
     var thresholds = tradeThresholds(assetType, timeframe);
     var mode = normalizeAssetType(assetType);
+    var maxTargetMultiple = tradeMaxTargetMultiplier(assetType);
     var entryZone = candidate.entryZone || null;
     var coverZone = candidate.coverZone || candidate.takeProfitZone || null;
     var failureExitZone = candidate.failureExitZone || null;
@@ -1757,22 +1826,34 @@
     if (!coverZone || !failureExitZone) {
       return { valid: false, reason: 'No setup: missing cover or failure exit zone' };
     }
+    var entryLow = toNumber(entryZone.zoneLow);
+    var entryHigh = toNumber(entryZone.zoneHigh);
+    var coverHigh = toNumber(coverZone && coverZone.zoneHigh);
+    var failureExitLow = toNumber(failureExitZone && failureExitZone.zoneLow);
+    if (!(coverHigh < entryLow)) {
+      return { valid: false, reason: 'No setup: invalid zone ordering' };
+    }
+    if (!(failureExitLow > entryHigh)) {
+      return { valid: false, reason: 'No setup: invalid zone ordering' };
+    }
+
     var metrics = computeShortRewardRisk(entryZone, coverZone, failureExitZone);
     if (metrics.entryMid == null || metrics.coverMid == null || metrics.failureExitMid == null || metrics.entryMid <= 0) {
       return { valid: false, reason: 'No setup: invalid short zone data', metrics: metrics };
     }
-    if (!(metrics.coverMid < metrics.entryMid)) {
-      return { valid: false, reason: 'No setup: invalid zone ordering', metrics: metrics };
-    }
-    if (!(metrics.failureExitMid > metrics.entryMid)) {
-      return { valid: false, reason: 'No setup: invalid zone ordering', metrics: metrics };
-    }
-    var minDistance = mode === 'crypto' ? 3.0 : 2.0;
+    var minDistance = toNumber(thresholds.minTakeProfitDistancePct);
+    if (minDistance == null) minDistance = mode === 'crypto' ? 3.0 : 2.0;
     if (metrics.rewardPct == null || metrics.rewardPct < minDistance) {
       return { valid: false, reason: 'No setup: cover too close to entry', metrics: metrics };
     }
     if (metrics.rewardPct == null || metrics.rewardPct < thresholds.minRewardPct) {
       return { valid: false, reason: 'No setup: downside too small', metrics: metrics };
+    }
+    if (metrics.coverMid != null && metrics.entryMid != null && metrics.coverMid < (metrics.entryMid / maxTargetMultiple)) {
+      return { valid: false, reason: 'No setup: cover target too far from entry', metrics: metrics };
+    }
+    if (metrics.riskPct == null || metrics.riskPct < 1.0) {
+      return { valid: false, reason: 'No setup: risk distance too small', metrics: metrics };
     }
     if (metrics.rr == null || metrics.rr < thresholds.minRR) {
       return { valid: false, reason: 'No setup: reward/risk too weak', metrics: metrics };
@@ -1881,8 +1962,12 @@
     var entryMid = midpoint(entryZone && entryZone.zoneLow, entryZone && entryZone.zoneHigh);
     var coverLevels = buildShortCoverCandidates(snapshot, timeKey, mode, entryZone);
     var failureLevels = buildShortFailureExitCandidates(snapshot, timeKey, mode, entryZone);
-    var coverZone = buildConfluenceZone(coverLevels, mode, 'support', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
-    var failureExitZone = buildConfluenceZone(failureLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var coverZoneCandidates = buildConfluenceZoneCandidates(coverLevels, mode, 'support', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var failureExitZoneCandidates = buildConfluenceZoneCandidates(failureLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var coverZone = selectNearestValidZone(coverZoneCandidates, entryZone, 'below', {
+      maxTargetMultiple: tradeMaxTargetMultiplier(mode)
+    });
+    var failureExitZone = selectNearestValidZone(failureExitZoneCandidates, entryZone, 'above');
     var coverSetup = coverZone ? {
       type: 'Cover / Take Profit',
       zone: coverZone,
@@ -1918,6 +2003,8 @@
       entrySetup: entrySetup,
       coverSetup: coverSetup,
       failureExitSetup: failureExitSetup,
+      coverZoneCandidates: coverZoneCandidates,
+      failureExitZoneCandidates: failureExitZoneCandidates,
       rewardRisk: rewardRisk,
       setupScore: setupScore,
       confidence: {
@@ -2002,6 +2089,7 @@
   function validateTradePlan(setup, assetType, timeframe) {
     var candidate = setup || {};
     var thresholds = tradeThresholds(assetType, timeframe);
+    var maxTargetMultiple = tradeMaxTargetMultiplier(assetType);
     var entryZone = candidate.entryZone || null;
     var takeProfitZone = candidate.takeProfitZone || null;
     var failureExitZone = candidate.failureExitZone || null;
@@ -2011,21 +2099,32 @@
     if (!takeProfitZone || !failureExitZone) {
       return { valid: false, reason: 'No setup: missing take-profit or failure exit zone' };
     }
+    var entryLow = toNumber(entryZone.zoneLow);
+    var entryHigh = toNumber(entryZone.zoneHigh);
+    var takeProfitLow = toNumber(takeProfitZone && takeProfitZone.zoneLow);
+    var failureExitHigh = toNumber(failureExitZone && failureExitZone.zoneHigh);
+    if (!(takeProfitLow > entryHigh)) {
+      return { valid: false, reason: 'No setup: invalid zone ordering' };
+    }
+    if (!(failureExitHigh < entryLow)) {
+      return { valid: false, reason: 'No setup: invalid zone ordering' };
+    }
+
     var metrics = computeRewardRisk(entryZone, takeProfitZone, failureExitZone);
     if (metrics.entryMid == null || metrics.takeProfitMid == null || metrics.failureExitMid == null || metrics.entryMid <= 0) {
       return { valid: false, reason: 'No setup: invalid zone data', metrics: metrics };
-    }
-    if (!(metrics.takeProfitMid > metrics.entryMid)) {
-      return { valid: false, reason: 'No setup: invalid zone ordering', metrics: metrics };
-    }
-    if (!(metrics.failureExitMid < metrics.entryMid)) {
-      return { valid: false, reason: 'No setup: invalid zone ordering', metrics: metrics };
     }
     if (metrics.rewardPct == null || metrics.rewardPct < thresholds.minTakeProfitDistancePct) {
       return { valid: false, reason: 'No setup: take-profit too close to entry', metrics: metrics };
     }
     if (metrics.rewardPct == null || metrics.rewardPct < thresholds.minRewardPct) {
       return { valid: false, reason: 'No setup: upside too small', metrics: metrics };
+    }
+    if (metrics.takeProfitMid != null && metrics.entryMid != null && metrics.takeProfitMid > (metrics.entryMid * maxTargetMultiple)) {
+      return { valid: false, reason: 'No setup: take-profit too far from entry', metrics: metrics };
+    }
+    if (metrics.riskPct == null || metrics.riskPct < 1.0) {
+      return { valid: false, reason: 'No setup: risk distance too small', metrics: metrics };
     }
     if (metrics.rr == null || metrics.rr < thresholds.minRR) {
       return { valid: false, reason: 'No setup: reward/risk too weak', metrics: metrics };
@@ -2347,8 +2446,12 @@
     var entryMid = midpoint(entryZone && entryZone.zoneLow, entryZone && entryZone.zoneHigh);
     var takeProfitLevels = buildTakeProfitCandidates(snapshot, timeKey, mode, entryZone, setup.type);
     var failureLevels = buildFailureExitCandidates(snapshot, timeKey, mode, entryZone, setup.type);
-    var takeProfitZone = buildConfluenceZone(takeProfitLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
-    var failureExitZone = buildConfluenceZone(failureLevels, mode, 'support', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var takeProfitZoneCandidates = buildConfluenceZoneCandidates(takeProfitLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var failureExitZoneCandidates = buildConfluenceZoneCandidates(failureLevels, mode, 'support', atrPct, timeKey, { referencePrice: entryMid != null ? entryMid : close, atrPct: atrPct });
+    var takeProfitZone = selectNearestValidZone(takeProfitZoneCandidates, entryZone, 'above', {
+      maxTargetMultiple: tradeMaxTargetMultiplier(mode)
+    });
+    var failureExitZone = selectNearestValidZone(failureExitZoneCandidates, entryZone, 'below');
     var takeProfitSetup = takeProfitZone ? {
       type: 'Take Profit Zone',
       zone: takeProfitZone,
@@ -2384,6 +2487,8 @@
       entrySetup: entrySetup,
       takeProfitSetup: takeProfitSetup,
       failureExitSetup: failureExitSetup,
+      takeProfitZoneCandidates: takeProfitZoneCandidates,
+      failureExitZoneCandidates: failureExitZoneCandidates,
       rewardRisk: rewardRisk,
       setupScore: setupScore,
       confidence: {
@@ -2473,7 +2578,11 @@
     var mode = normalizeAssetType(assetType);
     var atrPct = computeAtrPct(values, close);
     var levels = Array.isArray(precomputedCandidates) ? precomputedCandidates : buildTakeProfitCandidates(snapshot, timeKey, mode, null, setupType);
-    var takeProfitZone = buildConfluenceZone(levels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var takeProfitZoneCandidates = buildConfluenceZoneCandidates(levels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var referenceZone = buildReferenceZoneFromPrice(close);
+    var takeProfitZone = referenceZone ? selectNearestValidZone(takeProfitZoneCandidates, referenceZone, 'above', {
+      maxTargetMultiple: tradeMaxTargetMultiplier(mode)
+    }) : null;
     if (takeProfitZone && isValidTakeProfitZone(takeProfitZone, close)) {
       return { type: 'Take Profit Zone', zone: takeProfitZone, reasons: uniqueStrings((takeProfitZone.reasons || []).concat(['Overhead resistance cluster'])) };
     }
@@ -2488,7 +2597,9 @@
     var mode = normalizeAssetType(assetType);
     var atrPct = computeAtrPct(values, close);
     var levels = Array.isArray(precomputedCandidates) ? precomputedCandidates : buildFailureExitCandidates(snapshot, timeKey, mode, null, setupType);
-    var failureZone = buildConfluenceZone(levels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var failureZoneCandidates = buildConfluenceZoneCandidates(levels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var referenceZone = buildReferenceZoneFromPrice(close);
+    var failureZone = referenceZone ? selectNearestValidZone(failureZoneCandidates, referenceZone, 'below') : null;
     if (failureZone && isValidFailureZone(failureZone, close)) {
       return { type: 'Failure Exit Zone', zone: failureZone, reasons: uniqueStrings((failureZone.reasons || []).concat(['Downside invalidation zone'])) };
     }
@@ -2507,8 +2618,34 @@
     return n.toFixed(d);
   }
 
-  function buildTradePlanDebugDump(timeframe, chosenSetup, candidateSetups, rejectionReason) {
+  function mapZoneCandidatesForDebug(list) {
+    return (Array.isArray(list) ? list : []).map(function (zone) {
+      var z = zone || {};
+      return {
+        zoneLow: toNumber(z.zoneLow),
+        zoneHigh: toNumber(z.zoneHigh),
+        zoneMid: midpoint(z.zoneLow, z.zoneHigh),
+        score: toNumber(z.score),
+        confluenceCount: toNumber(z.confluenceCount),
+        structuralImportance: toNumber(z.structuralImportance),
+        distanceFromEntry: toNumber(z.distanceFromEntry)
+      };
+    });
+  }
+
+  function debugTicker(snapshot) {
+    var src = snapshot || {};
+    var ticker = src.ticker || src.symbol || src.assetSymbol ||
+      (src.meta && (src.meta.ticker || src.meta.symbol)) ||
+      (src.values && src.values.symbol) ||
+      null;
+    if (!ticker) return 'n/a';
+    return String(ticker).toUpperCase();
+  }
+
+  function buildTradePlanDebugDump(ticker, timeframe, chosenSetup, candidateSetups, rejectionReason) {
     var lines = [];
+    lines.push('ticker=' + String(ticker || 'n/a'));
     lines.push('timeframe=' + String(timeframe || '1d').toUpperCase());
     lines.push('chosen=' + String(chosenSetup || 'none'));
     if (rejectionReason) lines.push('rejection=' + String(rejectionReason));
@@ -2524,6 +2661,9 @@
         ' conf=' + String(row.confidenceLabel || 'n/a') +
         (row.confidenceCapApplied ? (' cap=' + String(row.confidenceMaxLabel || 'n/a')) : '') +
         (row.confidenceCapReason ? (' capReason=' + String(row.confidenceCapReason)) : '') +
+        ' entry=[' + formatTradeDebugNumber(row.entryLow, 4) + ',' + formatTradeDebugNumber(row.entryHigh, 4) + ']' +
+        ' target=[' + formatTradeDebugNumber(row.takeProfitLow, 4) + ',' + formatTradeDebugNumber(row.takeProfitHigh, 4) + ']' +
+        ' failure=[' + formatTradeDebugNumber(row.failureExitLow, 4) + ',' + formatTradeDebugNumber(row.failureExitHigh, 4) + ']' +
         ' entryMid=' + formatTradeDebugNumber(row.entryMid, 4) +
         ' tpMid=' + formatTradeDebugNumber(row.takeProfitMid, 4) +
         ' failMid=' + formatTradeDebugNumber(row.failureExitMid, 4) +
@@ -2545,8 +2685,13 @@
     var entryZone = entrySetup && entrySetup.zone ? entrySetup.zone : null;
     var takeProfitLevels = buildTakeProfitCandidates(snapshot, timeKey, mode, entryZone, entrySetup ? entrySetup.type : '');
     var failureLevels = buildFailureExitCandidates(snapshot, timeKey, mode, entryZone, entrySetup ? entrySetup.type : '');
-    var takeProfitZone = buildConfluenceZone(takeProfitLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
-    var failureZone = buildConfluenceZone(failureLevels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var takeProfitZoneCandidates = buildConfluenceZoneCandidates(takeProfitLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var failureZoneCandidates = buildConfluenceZoneCandidates(failureLevels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var referenceZone = buildReferenceZoneFromPrice(close);
+    var takeProfitZone = referenceZone ? selectNearestValidZone(takeProfitZoneCandidates, referenceZone, 'above', {
+      maxTargetMultiple: tradeMaxTargetMultiplier(mode)
+    }) : null;
+    var failureZone = referenceZone ? selectNearestValidZone(failureZoneCandidates, referenceZone, 'below') : null;
     if (takeProfitZone && !isValidTakeProfitZone(takeProfitZone, close)) takeProfitZone = null;
     if (failureZone && !isValidFailureZone(failureZone, close)) failureZone = null;
     return {
@@ -2560,7 +2705,9 @@
         type: 'Failure Exit Zone',
         zone: failureZone,
         reasons: uniqueStrings((failureZone.reasons || []).concat(['Holder invalidation zone']))
-      } : null
+      } : null,
+      takeProfitZoneCandidates: takeProfitZoneCandidates,
+      failureZoneCandidates: failureZoneCandidates
     };
   }
 
@@ -2608,6 +2755,9 @@
       return evaluateEntryCandidate(snapshot, timeKey, mode, entry, atrPct);
     });
     var candidateDebug = evaluatedCandidates.map(function (item) {
+      var entryZone = item.entrySetup && item.entrySetup.zone ? item.entrySetup.zone : {};
+      var chosenTarget = item.takeProfitSetup && item.takeProfitSetup.zone ? item.takeProfitSetup.zone : null;
+      var chosenFailure = item.failureExitSetup && item.failureExitSetup.zone ? item.failureExitSetup.zone : null;
       return {
         type: item.type,
         eligible: !!(item.candidate && item.candidate.eligible),
@@ -2623,14 +2773,32 @@
         baseScore: item.confidence ? item.confidence.baseScore : item.setupScore,
         regimePenalty: item.confidence ? item.confidence.regimePenalty : 0,
         regimePenaltyReason: item.confidence ? item.confidence.regimePenaltyReason : '',
+        entryLow: toNumber(entryZone.zoneLow),
+        entryHigh: toNumber(entryZone.zoneHigh),
         entryMid: item.rewardRisk ? item.rewardRisk.entryMid : null,
+        takeProfitLow: chosenTarget ? toNumber(chosenTarget.zoneLow) : null,
+        takeProfitHigh: chosenTarget ? toNumber(chosenTarget.zoneHigh) : null,
         takeProfitMid: item.rewardRisk ? item.rewardRisk.takeProfitMid : null,
+        failureExitLow: chosenFailure ? toNumber(chosenFailure.zoneLow) : null,
+        failureExitHigh: chosenFailure ? toNumber(chosenFailure.zoneHigh) : null,
         failureExitMid: item.rewardRisk ? item.rewardRisk.failureExitMid : null,
         rewardPct: item.rewardRisk ? item.rewardRisk.rewardPct : null,
         riskPct: item.rewardRisk ? item.rewardRisk.riskPct : null,
         rr: item.rewardRisk ? item.rewardRisk.rr : null,
         validation: item.validation || null,
-        validationReason: item.validation && item.validation.reason ? item.validation.reason : ''
+        validationReason: item.validation && item.validation.reason ? item.validation.reason : '',
+        targetClusters: mapZoneCandidatesForDebug(item.takeProfitZoneCandidates),
+        failureClusters: mapZoneCandidatesForDebug(item.failureExitZoneCandidates),
+        chosenTargetZone: item.takeProfitSetup && item.takeProfitSetup.zone ? {
+          zoneLow: item.takeProfitSetup.zone.zoneLow,
+          zoneHigh: item.takeProfitSetup.zone.zoneHigh,
+          zoneMid: midpoint(item.takeProfitSetup.zone.zoneLow, item.takeProfitSetup.zone.zoneHigh)
+        } : null,
+        chosenFailureZone: item.failureExitSetup && item.failureExitSetup.zone ? {
+          zoneLow: item.failureExitSetup.zone.zoneLow,
+          zoneHigh: item.failureExitSetup.zone.zoneHigh,
+          zoneMid: midpoint(item.failureExitSetup.zone.zoneLow, item.failureExitSetup.zone.zoneHigh)
+        } : null
       };
     });
 
@@ -2669,7 +2837,7 @@
           candidateSetups: candidateDebug,
           chosenSetup: null,
           rejectionReason: rejection,
-          dump: buildTradePlanDebugDump(timeKey, null, candidateDebug, rejection)
+          dump: buildTradePlanDebugDump(debugTicker(snapshot), timeKey, null, candidateDebug, rejection)
         }
       };
     }
@@ -2717,11 +2885,14 @@
       note: 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.',
       reason: bestEntry ? '' : rejection,
       debug: {
+        ticker: debugTicker(snapshot),
         side: 'long',
         timeframe: timeKey,
         atrPct: atrPct,
         candidateEntryClusters: entryFamilies,
         candidateSetups: candidateDebug,
+        holderTargetClusters: mapZoneCandidatesForDebug(holderPlan.takeProfitZoneCandidates),
+        holderFailureClusters: mapZoneCandidatesForDebug(holderPlan.failureZoneCandidates),
         holderTakeProfitCluster: takeProfitSetup && takeProfitSetup.zone ? takeProfitSetup.zone : null,
         holderFailureExitCluster: failureExitSetup && failureExitSetup.zone ? failureExitSetup.zone : null,
         chosenSetup: bestEntry ? bestEntry.type : 'Holder Exit Plan',
@@ -2733,17 +2904,21 @@
         confidenceCapApplied: bestEntry && bestEntry.confidence ? !!bestEntry.confidence.capApplied : false,
         confidenceCapReason: bestEntry && bestEntry.confidence ? bestEntry.confidence.capReason : '',
         finalConfidence: confidenceLabel,
+        entryZone: entrySetup && entrySetup.zone ? entrySetup.zone : null,
+        targetZone: takeProfitSetup && takeProfitSetup.zone ? takeProfitSetup.zone : null,
+        failureZone: failureExitSetup && failureExitSetup.zone ? failureExitSetup.zone : null,
         rewardPct: bestEntry && rewardRisk.rewardPct != null ? rewardRisk.rewardPct : null,
         riskPct: bestEntry && rewardRisk.riskPct != null ? rewardRisk.riskPct : null,
         rr: bestEntry && rewardRisk.rr != null ? rewardRisk.rr : null,
         rejectionReason: bestEntry ? '' : rejection,
-        dump: buildTradePlanDebugDump(timeKey, bestEntry ? bestEntry.type : 'Holder Exit Plan', candidateDebug, bestEntry ? '' : rejection)
+        dump: buildTradePlanDebugDump(debugTicker(snapshot), timeKey, bestEntry ? bestEntry.type : 'Holder Exit Plan', candidateDebug, bestEntry ? '' : rejection)
       }
     };
   }
 
-  function buildShortTradePlanDebugDump(timeframe, chosenSetup, candidateSetups, rejectionReason) {
+  function buildShortTradePlanDebugDump(ticker, timeframe, chosenSetup, candidateSetups, rejectionReason) {
     var lines = [];
+    lines.push('ticker=' + String(ticker || 'n/a'));
     lines.push('timeframe=' + String(timeframe || '1d').toUpperCase());
     lines.push('chosen=' + String(chosenSetup || 'none'));
     if (rejectionReason) lines.push('rejection=' + String(rejectionReason));
@@ -2759,6 +2934,9 @@
         ' conf=' + String(row.confidenceLabel || 'n/a') +
         (row.confidenceCapApplied ? (' cap=' + String(row.confidenceMaxLabel || 'n/a')) : '') +
         (row.confidenceCapReason ? (' capReason=' + String(row.confidenceCapReason)) : '') +
+        ' entry=[' + formatTradeDebugNumber(row.entryLow, 4) + ',' + formatTradeDebugNumber(row.entryHigh, 4) + ']' +
+        ' target=[' + formatTradeDebugNumber(row.coverLow, 4) + ',' + formatTradeDebugNumber(row.coverHigh, 4) + ']' +
+        ' failure=[' + formatTradeDebugNumber(row.failureExitLow, 4) + ',' + formatTradeDebugNumber(row.failureExitHigh, 4) + ']' +
         ' entryMid=' + formatTradeDebugNumber(row.entryMid, 4) +
         ' coverMid=' + formatTradeDebugNumber(row.coverMid, 4) +
         ' failMid=' + formatTradeDebugNumber(row.failureExitMid, 4) +
@@ -2780,8 +2958,13 @@
     var entryZone = entrySetup && entrySetup.zone ? entrySetup.zone : null;
     var coverLevels = buildShortCoverCandidates(snapshot, timeKey, mode, entryZone);
     var failureLevels = buildShortFailureExitCandidates(snapshot, timeKey, mode, entryZone);
-    var coverZone = buildConfluenceZone(coverLevels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
-    var failureZone = buildConfluenceZone(failureLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var coverZoneCandidates = buildConfluenceZoneCandidates(coverLevels, mode, 'support', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var failureZoneCandidates = buildConfluenceZoneCandidates(failureLevels, mode, 'resistance', atrPct, timeKey, { referencePrice: close, atrPct: atrPct });
+    var referenceZone = buildReferenceZoneFromPrice(close);
+    var coverZone = referenceZone ? selectNearestValidZone(coverZoneCandidates, referenceZone, 'below', {
+      maxTargetMultiple: tradeMaxTargetMultiplier(mode)
+    }) : null;
+    var failureZone = referenceZone ? selectNearestValidZone(failureZoneCandidates, referenceZone, 'above') : null;
     if (coverZone && !isValidShortCoverZone(coverZone, close)) coverZone = null;
     if (failureZone && !isValidShortFailureZone(failureZone, close)) failureZone = null;
     return {
@@ -2795,7 +2978,9 @@
         type: 'Failure Exit',
         zone: failureZone,
         reasons: uniqueStrings((failureZone.reasons || []).concat(['Holder short invalidation zone']))
-      } : null
+      } : null,
+      coverZoneCandidates: coverZoneCandidates,
+      failureZoneCandidates: failureZoneCandidates
     };
   }
 
@@ -2843,6 +3028,9 @@
       return evaluateShortEntryCandidate(snapshot, timeKey, mode, entry, atrPct);
     });
     var candidateDebug = evaluatedCandidates.map(function (item) {
+      var entryZone = item.entrySetup && item.entrySetup.zone ? item.entrySetup.zone : {};
+      var chosenTarget = item.coverSetup && item.coverSetup.zone ? item.coverSetup.zone : null;
+      var chosenFailure = item.failureExitSetup && item.failureExitSetup.zone ? item.failureExitSetup.zone : null;
       return {
         type: item.type,
         eligible: !!(item.candidate && item.candidate.eligible),
@@ -2858,14 +3046,32 @@
         baseScore: item.confidence ? item.confidence.baseScore : item.setupScore,
         regimePenalty: item.confidence ? item.confidence.regimePenalty : 0,
         regimePenaltyReason: item.confidence ? item.confidence.regimePenaltyReason : '',
+        entryLow: toNumber(entryZone.zoneLow),
+        entryHigh: toNumber(entryZone.zoneHigh),
         entryMid: item.rewardRisk ? item.rewardRisk.entryMid : null,
+        coverLow: chosenTarget ? toNumber(chosenTarget.zoneLow) : null,
+        coverHigh: chosenTarget ? toNumber(chosenTarget.zoneHigh) : null,
         coverMid: item.rewardRisk ? item.rewardRisk.coverMid : null,
+        failureExitLow: chosenFailure ? toNumber(chosenFailure.zoneLow) : null,
+        failureExitHigh: chosenFailure ? toNumber(chosenFailure.zoneHigh) : null,
         failureExitMid: item.rewardRisk ? item.rewardRisk.failureExitMid : null,
         rewardPct: item.rewardRisk ? item.rewardRisk.rewardPct : null,
         riskPct: item.rewardRisk ? item.rewardRisk.riskPct : null,
         rr: item.rewardRisk ? item.rewardRisk.rr : null,
         validation: item.validation || null,
-        validationReason: item.validation && item.validation.reason ? item.validation.reason : ''
+        validationReason: item.validation && item.validation.reason ? item.validation.reason : '',
+        targetClusters: mapZoneCandidatesForDebug(item.coverZoneCandidates),
+        failureClusters: mapZoneCandidatesForDebug(item.failureExitZoneCandidates),
+        chosenTargetZone: item.coverSetup && item.coverSetup.zone ? {
+          zoneLow: item.coverSetup.zone.zoneLow,
+          zoneHigh: item.coverSetup.zone.zoneHigh,
+          zoneMid: midpoint(item.coverSetup.zone.zoneLow, item.coverSetup.zone.zoneHigh)
+        } : null,
+        chosenFailureZone: item.failureExitSetup && item.failureExitSetup.zone ? {
+          zoneLow: item.failureExitSetup.zone.zoneLow,
+          zoneHigh: item.failureExitSetup.zone.zoneHigh,
+          zoneMid: midpoint(item.failureExitSetup.zone.zoneLow, item.failureExitSetup.zone.zoneHigh)
+        } : null
       };
     });
 
@@ -2904,7 +3110,7 @@
           candidateSetups: candidateDebug,
           chosenSetup: null,
           rejectionReason: rejection,
-          dump: buildShortTradePlanDebugDump(timeKey, null, candidateDebug, rejection)
+          dump: buildShortTradePlanDebugDump(debugTicker(snapshot), timeKey, null, candidateDebug, rejection)
         }
       };
     }
@@ -2952,11 +3158,14 @@
       note: 'Estimated short entry/cover/failure zones are derived from technical indicator confluence and are not guaranteed.',
       reason: bestEntry ? '' : rejection,
       debug: {
+        ticker: debugTicker(snapshot),
         side: 'short',
         timeframe: timeKey,
         atrPct: atrPct,
         candidateEntryClusters: entryFamilies,
         candidateSetups: candidateDebug,
+        holderTargetClusters: mapZoneCandidatesForDebug(holderPlan.coverZoneCandidates),
+        holderFailureClusters: mapZoneCandidatesForDebug(holderPlan.failureZoneCandidates),
         holderCoverCluster: coverSetup && coverSetup.zone ? coverSetup.zone : null,
         holderFailureExitCluster: failureExitSetup && failureExitSetup.zone ? failureExitSetup.zone : null,
         chosenSetup: bestEntry ? bestEntry.type : 'Holder Short Plan',
@@ -2968,11 +3177,14 @@
         confidenceCapApplied: bestEntry && bestEntry.confidence ? !!bestEntry.confidence.capApplied : false,
         confidenceCapReason: bestEntry && bestEntry.confidence ? bestEntry.confidence.capReason : '',
         finalConfidence: confidenceLabel,
+        entryZone: entrySetup && entrySetup.zone ? entrySetup.zone : null,
+        targetZone: coverSetup && coverSetup.zone ? coverSetup.zone : null,
+        failureZone: failureExitSetup && failureExitSetup.zone ? failureExitSetup.zone : null,
         rewardPct: bestEntry && rewardRisk.rewardPct != null ? rewardRisk.rewardPct : null,
         riskPct: bestEntry && rewardRisk.riskPct != null ? rewardRisk.riskPct : null,
         rr: bestEntry && rewardRisk.rr != null ? rewardRisk.rr : null,
         rejectionReason: bestEntry ? '' : rejection,
-        dump: buildShortTradePlanDebugDump(timeKey, bestEntry ? bestEntry.type : 'Holder Short Plan', candidateDebug, bestEntry ? '' : rejection)
+        dump: buildShortTradePlanDebugDump(debugTicker(snapshot), timeKey, bestEntry ? bestEntry.type : 'Holder Short Plan', candidateDebug, bestEntry ? '' : rejection)
       }
     };
   }
