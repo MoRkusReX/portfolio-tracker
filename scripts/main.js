@@ -679,6 +679,7 @@
       var reversal = snapshot.reversal || {};
       var fib = snapshot && snapshot.values ? snapshot.values.fib : null;
       var tradePlan = snapshot && snapshot.values ? snapshot.values.tradePlan : null;
+      var shortTradePlan = snapshot && snapshot.values ? snapshot.values.shortTradePlan : null;
       var adxTrend = snapshot && snapshot.values ? snapshot.values.adxTrend : null;
       var volumeInfo = snapshot && snapshot.values ? snapshot.values.volumeConfirmation : null;
       try {
@@ -702,6 +703,7 @@
           reason: fib && fib.reason
         });
         console.debug('[Indicators]', String(timeframeKey).toUpperCase(), 'trade-plan:', tradePlan && tradePlan.debug ? tradePlan.debug : tradePlan);
+        console.debug('[Indicators]', String(timeframeKey).toUpperCase(), 'short-trade-plan:', shortTradePlan && shortTradePlan.debug ? shortTradePlan.debug : shortTradePlan);
       } catch (err) {
         // Ignore console failures in constrained environments.
       }
@@ -3342,7 +3344,9 @@
         'Fibonacci': 'Fibonacci: Common pullback levels traders watch (23.6, 38.2, 50, 61.8, 78.6) for possible support or resistance.',
         'EMA Position': 'EMA Position: Shows where price is vs EMA20 and EMA50 to spot strength, pullback, or weakness.',
         'Reversal': 'Reversal: Estimates chance of a bounce after weakness using oversold signals, support, momentum shift, and volume.',
-        'Trade Plan': 'Trade Plan: Suggested entry, take-profit, and failure-exit zones from indicator confluence. For planning only, not guaranteed.'
+        'Trade Plan': 'Trade Plan: Suggested entry, take-profit, and failure-exit zones from indicator confluence. For planning only, not guaranteed.',
+        'Long Trade Plan': 'Long Trade Plan: Suggested entry, take-profit, and failure-exit zones from indicator confluence. For planning only, not guaranteed.',
+        'Short Trade Plan': 'Short Trade Plan: Suggested short-entry, cover target, and failure-exit zones from bearish confluence. For planning only, not guaranteed.'
       };
       return byTitle[String(title || '').trim()] || 'Quick indicator summary used to understand trend, momentum, and risk.';
     }
@@ -3611,7 +3615,7 @@
         : 'Confidence: Caution';
       return '<div class="indicator-tech indicator-tech--tradeplan">' +
         '<div class="indicator-tech__head">' +
-          '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + escapeHtml(indicatorHelpText('Trade Plan')) + '" aria-label="Trade plan explanation">Trade Plan</div></div>' +
+          '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + escapeHtml(indicatorHelpText('Long Trade Plan')) + '" aria-label="Long trade plan explanation">Long Trade Plan</div></div>' +
           '<span class="' + tradeConfidencePillClass(confidence) + '">' + escapeHtml(confidence) + '</span>' +
         '</div>' +
         '<div class="indicator-tech__metrics indicator-tech__metrics--3">' +
@@ -3627,6 +3631,49 @@
         '<div class="indicator-tech__note">' + escapeHtml(confidenceNote) + '</div>' +
         '<div class="indicator-tech__note indicator-trade-plan__reasons">' + escapeHtml(planReason) + '</div>' +
         '<div class="indicator-tech__note indicator-trade-plan__disclaimer">' + escapeHtml(String(plan.note || 'Estimated entry/exit zones are derived from technical indicator confluence and are not guaranteed.')) + '</div>' +
+      '</div>';
+    }
+
+    function shortTradePlanBlock(tf) {
+      var plan = (tf && tf.shortTradePlan) || (tf && tf.values && tf.values.shortTradePlan) || {};
+      var planValid = isTradePlanRenderable(plan);
+      var entryType = planValid ? String(plan.entryType || 'No setup') : 'No setup';
+      var confidence = planValid ? friendlyTradeConfidenceLabel(plan.confidence || plan.planStatus || 'Caution') : 'Caution';
+      var reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
+      var entryZone = planValid ? formatTradeZone(plan.entryZoneLow, plan.entryZoneHigh) : 'No setup';
+      var coverZone = planValid ? formatTradeZone(plan.coverZoneLow, plan.coverZoneHigh) : formatTradeZone(plan.takeProfitZoneLow, plan.takeProfitZoneHigh);
+      var failureExitZone = planValid ? formatTradeZone(plan.failureExitZoneLow, plan.failureExitZoneHigh) : 'No clear failure exit';
+      var rrValue = planValid ? Number(plan.rr) : NaN;
+      var rrText = Number.isFinite(rrValue) ? (rrValue.toFixed(2) + 'x') : 'n/a';
+      if (coverZone === 'No setup') coverZone = 'No clear cover zone';
+      if (failureExitZone === 'No setup') failureExitZone = 'No clear failure exit';
+      var planReason = planValid
+        ? (reasons.length ? reasons.slice(0, 3).join(' • ') : String(plan.reason || 'No clean short confluence setup'))
+        : String(plan.reason || 'No setup: invalid zone ordering');
+      var confidenceText = planValid ? (confidence + ' (' + String(Number(plan.confidencePoints || 0)) + ')') : 'Caution (0)';
+      var confidenceNote = planValid
+        ? (String(confidence).toLowerCase() === 'caution'
+          ? 'Setup Quality: Caution. Lower conviction short setup - consider smaller size or more confirmation.'
+          : ('Setup Quality: ' + confidence))
+        : 'Setup Quality: Caution';
+      return '<div class="indicator-tech indicator-tech--tradeplan indicator-tech--shortplan">' +
+        '<div class="indicator-tech__head">' +
+          '<div class="indicator-tech__title-wrap"><div class="indicator-tech__title" tabindex="0" data-help-tooltip="' + escapeHtml(indicatorHelpText('Short Trade Plan')) + '" aria-label="Short trade plan explanation">Short Trade Plan</div></div>' +
+          '<span class="' + tradeConfidencePillClass(confidence) + '">' + escapeHtml(confidence) + '</span>' +
+        '</div>' +
+        '<div class="indicator-tech__metrics indicator-tech__metrics--3">' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>Short Entry</span><strong>' + escapeHtml(entryZone) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>Cover / Take Profit</span><strong>' + escapeHtml(coverZone) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>Failure Exit</span><strong>' + escapeHtml(failureExitZone) + '</strong></div>' +
+        '</div>' +
+        '<div class="indicator-tech__metrics indicator-tech__metrics--3">' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>Entry Type</span><strong>' + escapeHtml(entryType) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>Setup Quality</span><strong>' + escapeHtml(confidenceText) + '</strong></div>' +
+          '<div class="indicator-sr__metric indicator-tech__metric"><span>RR</span><strong>' + escapeHtml(rrText) + '</strong></div>' +
+        '</div>' +
+        '<div class="indicator-tech__note">' + escapeHtml(confidenceNote) + '</div>' +
+        '<div class="indicator-tech__note indicator-trade-plan__reasons">' + escapeHtml(planReason) + '</div>' +
+        '<div class="indicator-tech__note indicator-trade-plan__disclaimer">' + escapeHtml(String(plan.note || 'Estimated short entry/cover/failure zones are derived from technical indicator confluence and are not guaranteed.')) + '</div>' +
       '</div>';
     }
 
@@ -3705,6 +3752,7 @@
           emaPositionBlock(tf) +
           reversalBlock(tf) +
           tradePlanBlock(tf) +
+          shortTradePlanBlock(tf) +
         '</div>' +
         '<div class="indicator-note">Score: ' + escapeHtml(String(isFinite(Number(tf.score)) ? Number(tf.score) : 0)) + '</div>' +
       '</section>';

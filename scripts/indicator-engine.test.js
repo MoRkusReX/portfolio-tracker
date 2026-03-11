@@ -406,6 +406,70 @@ function baseTradeSnapshot() {
   };
 }
 
+function baseShortTradeSnapshot() {
+  return {
+    close: 100,
+    timeKey: '1d',
+    values: {
+      ema20: 101.2,
+      ema50: 103.8,
+      ema200: 108.5,
+      rsi14: 43,
+      macdLine: -0.9,
+      macdSignal: -0.5,
+      macdHistogram: -0.4,
+      bbUpper: 105.8,
+      bbMiddle: 100.8,
+      bbLower: 92.8,
+      adx14: 27,
+      volumeConfirmation: { status: 'Bearish confirmation' },
+      fib: {
+        available: true,
+        swingHigh: 112,
+        swingLow: 88,
+        levels: {
+          fib236: 106.8,
+          fib382: 103.6,
+          fib500: 101.0,
+          fib618: 95.2,
+          fib786: 90.6
+        }
+      },
+      sr: {
+        pivot: { p: 101.5, s1: 93.8, s2: 90.5, r1: 104.2, r2: 107.3 },
+        donchian: { support: 92.9, resistance: 106.1, midpoint: 99.5 },
+        nearest: { support: 93.6, resistance: 103.9, supportDistancePct: -6.4, resistanceDistancePct: 3.9 }
+      },
+      reversal: {
+        nearSupport: false,
+        macdHistogramRising: false,
+        supportZone: 93.2,
+        supportZones: [93.2, 92.4]
+      }
+    },
+    statuses: {
+      ema: 'Bearish',
+      rsi: 'Bearish',
+      macd: 'Bearish',
+      bollinger: 'Bearish',
+      sr: 'Bearish'
+    },
+    trendMeter: {
+      label: 'Bearish',
+      timeframeScore: -4
+    },
+    reversal: {
+      score: 1,
+      label: 'No reversal signal',
+      reasons: []
+    },
+    emaPosition: {
+      label: 'Bearish Risk'
+    },
+    overall: 'Bearish'
+  };
+}
+
 // 1) bullish pullback setup should generate a valid entry plan.
 let tradeSnapshot = baseTradeSnapshot();
 tradeSnapshot.values.atr14 = 2.1;
@@ -579,6 +643,285 @@ assert.ok(
   String(tradePlan.failureExitType).toLowerCase().indexOf('no clear failure exit') !== -1
 );
 assert.strictEqual(tradePlan.rr, null);
+
+// SHORT PLAN TESTS
+// 1) bearish rejection short should return valid short setup.
+let shortSnapshot = baseShortTradeSnapshot();
+let shortPlan = engine.computeShortTradePlan(shortSnapshot, '1d', 'stock');
+assert.strictEqual(shortPlan.available, true);
+assert.strictEqual(shortPlan.entryType, 'Rejection Short');
+assert.ok(Number.isFinite(shortPlan.rewardPct) && shortPlan.rewardPct >= 5);
+assert.ok(Number.isFinite(shortPlan.rr) && shortPlan.rr >= 1.5);
+
+// 2) breakdown short should return valid setup when downside room is sufficient.
+shortSnapshot = baseShortTradeSnapshot();
+shortSnapshot.close = 97.1;
+shortSnapshot.values.rsi14 = 38;
+shortSnapshot.values.macdHistogram = -0.6;
+shortSnapshot.values.sr.nearest.support = 97.4;
+shortSnapshot.values.sr.nearest.supportDistancePct = -0.3;
+shortSnapshot.values.sr.donchian.support = 97.0;
+shortSnapshot.values.sr.pivot.s1 = 96.8;
+shortSnapshot.values.sr.pivot.s2 = 89.4;
+shortSnapshot.values.fib.levels.fib618 = 96.6;
+shortSnapshot.values.fib.levels.fib786 = 89.6;
+shortSnapshot.values.bbLower = 89.2;
+shortSnapshot.values.reversal.supportZone = 89.5;
+shortSnapshot.values.ema50 = 98.9;
+shortSnapshot.values.ema200 = 99.8;
+shortSnapshot.values.sr.nearest.resistance = 98.6;
+shortSnapshot.values.sr.donchian.resistance = 98.9;
+shortSnapshot.values.bbUpper = 103.6;
+shortPlan = engine.computeShortTradePlan(shortSnapshot, '1d', 'stock');
+assert.strictEqual(shortPlan.available, true);
+assert.strictEqual(shortPlan.entryType, 'Breakdown Short');
+assert.ok(Number.isFinite(shortPlan.rewardPct) && shortPlan.rewardPct >= 5);
+
+// 3) exhaustion short should be valid when rally is overextended.
+shortSnapshot = baseShortTradeSnapshot();
+shortSnapshot.trendMeter.label = 'Neutral';
+shortSnapshot.trendMeter.timeframeScore = 0;
+shortSnapshot.statuses.ema = 'Neutral';
+shortSnapshot.statuses.macd = 'Neutral';
+shortSnapshot.close = 106.4;
+shortSnapshot.values.rsi14 = 71;
+shortSnapshot.values.macdLine = 0.2;
+shortSnapshot.values.macdSignal = 0.25;
+shortSnapshot.values.macdHistogram = -0.05;
+shortSnapshot.values.bbUpper = 106.8;
+shortSnapshot.values.bbLower = 97.6;
+shortSnapshot.values.sr.nearest.resistance = 107.1;
+shortSnapshot.values.sr.pivot.r1 = 107.3;
+shortSnapshot.values.sr.pivot.r2 = 110.8;
+shortSnapshot.values.sr.donchian.resistance = 108.2;
+shortSnapshot.values.fib.levels.fib236 = 107.5;
+shortSnapshot.values.sr.nearest.support = 101.4;
+shortSnapshot.values.sr.pivot.s1 = 101.0;
+shortSnapshot.values.sr.pivot.s2 = 98.1;
+shortSnapshot.values.fib.levels.fib618 = 99.0;
+shortSnapshot.values.fib.levels.fib786 = 96.2;
+shortPlan = engine.computeShortTradePlan(shortSnapshot, '1d', 'stock');
+assert.strictEqual(shortPlan.available, true);
+assert.strictEqual(shortPlan.entryType, 'Exhaustion Short');
+assert.ok(Number.isFinite(shortPlan.rewardPct) && shortPlan.rewardPct >= 5);
+
+// 4) invalid short where cover >= entry must reject.
+let shortValidation = engine.validateShortTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  coverZone: { zoneLow: 101.2, zoneHigh: 101.6 },
+  failureExitZone: { zoneLow: 104, zoneHigh: 105 }
+}, 'stock', '1d');
+assert.strictEqual(shortValidation.valid, false);
+assert.match(String(shortValidation.reason), /invalid zone ordering/);
+
+// 5) invalid short where failure exit <= entry must reject.
+shortValidation = engine.validateShortTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  coverZone: { zoneLow: 93, zoneHigh: 94 },
+  failureExitZone: { zoneLow: 98.8, zoneHigh: 99.4 }
+}, 'stock', '1d');
+assert.strictEqual(shortValidation.valid, false);
+assert.match(String(shortValidation.reason), /invalid zone ordering/);
+
+// 6) invalid short where downside < 5% must reject fresh short entry.
+shortValidation = engine.validateShortTradePlan({
+  entryZone: { zoneLow: 100, zoneHigh: 101 },
+  coverZone: { zoneLow: 98.2, zoneHigh: 98.7 },
+  failureExitZone: { zoneLow: 102.5, zoneHigh: 103.0 }
+}, 'stock', '1d');
+assert.strictEqual(shortValidation.valid, false);
+assert.match(String(shortValidation.reason), /downside too small|cover too close to entry/);
+
+// 7) holder-only short management should still show cover/failure when fresh entry fails.
+shortSnapshot = baseShortTradeSnapshot();
+shortSnapshot.close = 100;
+shortSnapshot.values.ema20 = 99.9;
+shortSnapshot.values.ema50 = 99.4;
+shortSnapshot.values.ema200 = 98.6;
+shortSnapshot.values.sr.pivot.p = 99.8;
+shortSnapshot.values.sr.nearest.resistance = 100.4;
+shortSnapshot.values.sr.donchian.resistance = 100.6;
+shortSnapshot.values.sr.pivot.r1 = 100.8;
+shortSnapshot.values.bbUpper = 101.1;
+shortSnapshot.values.sr.nearest.support = 98.8;
+shortSnapshot.values.sr.donchian.support = 98.6;
+shortSnapshot.values.sr.pivot.s1 = 98.7;
+shortSnapshot.values.sr.pivot.s2 = 98.3;
+shortSnapshot.values.bbLower = 98.4;
+shortSnapshot.values.fib.swingLow = 98.2;
+shortSnapshot.values.fib.levels.fib618 = 98.9;
+shortSnapshot.values.fib.levels.fib786 = 98.4;
+shortPlan = engine.computeShortTradePlan(shortSnapshot, '1d', 'stock');
+assert.strictEqual(shortPlan.available, true);
+assert.strictEqual(shortPlan.entryType, 'No setup');
+assert.ok(String(shortPlan.takeProfitType).toLowerCase().indexOf('cover') !== -1);
+assert.ok(String(shortPlan.failureExitType).toLowerCase().indexOf('failure') !== -1 || String(shortPlan.failureExitType).toLowerCase().indexOf('no clear') !== -1);
+assert.strictEqual(shortPlan.rr, null);
+
+// REGIME/CONFIDENCE ALIGNMENT TESTS
+// 1) bullish regime + strong long pullback can be Strong.
+tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.trendMeter.label = 'Bullish';
+tradeSnapshot.trendMeter.timeframeScore = 5;
+tradeSnapshot.statuses.ema = 'Bullish';
+tradeSnapshot.statuses.macd = 'Bullish';
+tradeSnapshot.values.rsi14 = 58;
+tradeSnapshot.values.adx14 = 31;
+tradeSnapshot.values.volumeConfirmation = { status: 'Bullish confirmation' };
+tradeSnapshot.values.sr.nearest.resistance = 113.4;
+tradeSnapshot.values.sr.donchian.resistance = 114.2;
+tradeSnapshot.values.bbUpper = 115.4;
+tradeSnapshot.values.sr.pivot.r1 = 112.8;
+tradeSnapshot.values.sr.pivot.r2 = 116.0;
+tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
+assert.strictEqual(tradePlan.entryType, 'Pullback Entry');
+assert.strictEqual(String(tradePlan.confidence), 'Strong');
+
+// 2) bearish regime + long bounce with reversal score 2 can exist but must not be Strong.
+tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.close = 99.5;
+tradeSnapshot.trendMeter.label = 'Bearish';
+tradeSnapshot.trendMeter.timeframeScore = -4;
+tradeSnapshot.statuses.ema = 'Bearish';
+tradeSnapshot.statuses.macd = 'Neutral';
+tradeSnapshot.reversal.score = 2;
+tradeSnapshot.values.rsi14 = 41;
+tradeSnapshot.values.macdLine = -0.2;
+tradeSnapshot.values.macdSignal = -0.1;
+tradeSnapshot.values.macdHistogram = -0.15;
+tradeSnapshot.values.reversal.macdHistogramRising = false;
+tradeSnapshot.values.sr.nearest.support = 96.8;
+tradeSnapshot.values.reversal.supportZone = 96.6;
+tradeSnapshot.values.fib.levels.fib618 = 96.4;
+tradeSnapshot.values.fib.levels.fib786 = 95.2;
+tradeSnapshot.values.bbLower = 96.1;
+tradeSnapshot.values.sr.donchian.support = 96.5;
+tradeSnapshot.values.sr.pivot.s1 = 96.2;
+tradeSnapshot.values.sr.pivot.s2 = 95.0;
+tradeSnapshot.values.ema50 = 95.8;
+tradeSnapshot.values.ema200 = 92.0;
+tradeSnapshot.values.sr.nearest.resistance = 106.8;
+tradeSnapshot.values.sr.donchian.resistance = 107.4;
+tradeSnapshot.values.sr.pivot.r1 = 106.5;
+tradeSnapshot.values.sr.pivot.r2 = 109.0;
+tradeSnapshot.values.bbUpper = 108.7;
+tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
+assert.strictEqual(tradePlan.entryType, 'Bounce Entry');
+assert.notStrictEqual(String(tradePlan.confidence), 'Strong');
+assert.ok(['Caution', 'Moderate'].indexOf(String(tradePlan.confidence)) !== -1);
+
+// 3) bearish regime + reversal score 4 + strong support + RR >= 2.2 can be Moderate (not Strong unless exceptional).
+tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.close = 99.2;
+tradeSnapshot.trendMeter.label = 'Bearish';
+tradeSnapshot.trendMeter.timeframeScore = -4;
+tradeSnapshot.statuses.ema = 'Bearish';
+tradeSnapshot.statuses.macd = 'Bearish'; // keep non-exceptional to enforce cap
+tradeSnapshot.reversal.score = 4;
+tradeSnapshot.values.rsi14 = 44;
+tradeSnapshot.values.macdLine = -0.4;
+tradeSnapshot.values.macdSignal = -0.2;
+tradeSnapshot.values.macdHistogram = -0.2;
+tradeSnapshot.values.reversal.macdHistogramRising = false;
+tradeSnapshot.values.sr.nearest.support = 95.8;
+tradeSnapshot.values.reversal.supportZone = 95.9;
+tradeSnapshot.values.fib.levels.fib618 = 95.5;
+tradeSnapshot.values.fib.levels.fib786 = 94.6;
+tradeSnapshot.values.bbLower = 95.4;
+tradeSnapshot.values.sr.donchian.support = 95.7;
+tradeSnapshot.values.sr.pivot.s1 = 95.6;
+tradeSnapshot.values.sr.pivot.s2 = 94.7;
+tradeSnapshot.values.ema50 = 95.2;
+tradeSnapshot.values.ema200 = 92.8;
+tradeSnapshot.values.sr.nearest.resistance = 110.8;
+tradeSnapshot.values.sr.donchian.resistance = 111.4;
+tradeSnapshot.values.sr.pivot.r1 = 110.4;
+tradeSnapshot.values.sr.pivot.r2 = 113.2;
+tradeSnapshot.values.bbUpper = 112.0;
+tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
+assert.strictEqual(tradePlan.entryType, 'Bounce Entry');
+assert.ok(Number.isFinite(tradePlan.rr) && tradePlan.rr >= 2.2);
+assert.strictEqual(String(tradePlan.confidence), 'Moderate');
+
+// 4) bearish regime + strong short breakdown can be Strong.
+shortSnapshot = baseShortTradeSnapshot();
+shortSnapshot.close = 97.0;
+shortSnapshot.trendMeter.label = 'Bearish';
+shortSnapshot.trendMeter.timeframeScore = -5;
+shortSnapshot.statuses.ema = 'Bearish';
+shortSnapshot.statuses.macd = 'Bearish';
+shortSnapshot.values.rsi14 = 37;
+shortSnapshot.values.adx14 = 31;
+shortSnapshot.values.volumeConfirmation = { status: 'Bearish confirmation' };
+shortSnapshot.values.sr.nearest.support = 97.3;
+shortSnapshot.values.sr.nearest.supportDistancePct = -0.3;
+shortSnapshot.values.sr.donchian.support = 97.1;
+shortSnapshot.values.sr.pivot.s1 = 96.9;
+shortSnapshot.values.sr.pivot.s2 = 89.3;
+shortSnapshot.values.fib.levels.fib618 = 96.8;
+shortSnapshot.values.fib.levels.fib786 = 89.5;
+shortSnapshot.values.bbLower = 89.0;
+shortSnapshot.values.reversal.supportZone = 89.4;
+shortSnapshot.values.ema50 = 98.7;
+shortSnapshot.values.ema200 = 99.8;
+shortSnapshot.values.sr.nearest.resistance = 98.6;
+shortSnapshot.values.sr.donchian.resistance = 98.9;
+shortSnapshot.values.bbUpper = 103.8;
+shortPlan = engine.computeShortTradePlan(shortSnapshot, '1d', 'stock');
+assert.strictEqual(shortPlan.available, true);
+assert.strictEqual(shortPlan.entryType, 'Breakdown Short');
+assert.strictEqual(String(shortPlan.confidence), 'Strong');
+
+// 5) bullish regime + short exhaustion can exist but not Strong by default.
+shortSnapshot = baseShortTradeSnapshot();
+shortSnapshot.close = 106.2;
+shortSnapshot.trendMeter.label = 'Bullish';
+shortSnapshot.trendMeter.timeframeScore = 4;
+shortSnapshot.statuses.ema = 'Bullish';
+shortSnapshot.statuses.macd = 'Bearish';
+shortSnapshot.values.rsi14 = 69;
+shortSnapshot.values.macdLine = 0.35;
+shortSnapshot.values.macdSignal = 0.45;
+shortSnapshot.values.macdHistogram = -0.1;
+shortSnapshot.values.bbUpper = 106.8;
+shortSnapshot.values.sr.nearest.resistance = 107.0;
+shortSnapshot.values.sr.donchian.resistance = 107.6;
+shortSnapshot.values.sr.pivot.r1 = 107.3;
+shortSnapshot.values.sr.pivot.r2 = 109.8;
+shortSnapshot.values.fib.levels.fib236 = 107.4;
+shortSnapshot.values.sr.nearest.support = 100.2;
+shortSnapshot.values.sr.donchian.support = 99.8;
+shortSnapshot.values.sr.pivot.s1 = 99.9;
+shortSnapshot.values.sr.pivot.s2 = 96.5;
+shortSnapshot.values.fib.levels.fib618 = 99.4;
+shortSnapshot.values.fib.levels.fib786 = 95.9;
+shortSnapshot.values.bbLower = 96.2;
+shortPlan = engine.computeShortTradePlan(shortSnapshot, '1d', 'stock');
+assert.strictEqual(shortPlan.available, true);
+assert.strictEqual(shortPlan.entryType, 'Exhaustion Short');
+assert.notStrictEqual(String(shortPlan.confidence), 'Strong');
+assert.ok(['Caution', 'Moderate'].indexOf(String(shortPlan.confidence)) !== -1);
+
+// 6) neutral regime quality setups are slightly penalized but can still be Moderate/Strong.
+tradeSnapshot = baseTradeSnapshot();
+tradeSnapshot.trendMeter.label = 'Neutral';
+tradeSnapshot.trendMeter.timeframeScore = 1;
+tradeSnapshot.statuses.ema = 'Bullish';
+tradeSnapshot.statuses.macd = 'Bullish';
+tradeSnapshot.values.rsi14 = 56;
+tradeSnapshot.values.adx14 = 26;
+tradeSnapshot.values.volumeConfirmation = { status: 'Bullish confirmation' };
+tradeSnapshot.values.sr.nearest.resistance = 112.6;
+tradeSnapshot.values.sr.donchian.resistance = 113.1;
+tradeSnapshot.values.bbUpper = 114.2;
+tradeSnapshot.values.sr.pivot.r1 = 112.1;
+tradeSnapshot.values.sr.pivot.r2 = 114.9;
+tradePlan = engine.computeTradePlan(tradeSnapshot, '1d', 'stock');
+assert.strictEqual(tradePlan.available, true);
+assert.ok(['Moderate', 'Strong'].indexOf(String(tradePlan.confidence)) !== -1);
 
 // baseline no-setup sanity case.
 tradeSnapshot = {
